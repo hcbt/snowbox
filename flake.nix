@@ -27,51 +27,26 @@
         let
           guestA = self.nixosConfigurations.spike-a;
           guestB = self.nixosConfigurations.spike-b;
-          hello = self.packages.${linux}.hello;
-          mkSpike =
+          guestBoot =
+            guest:
+            let
+              cfg = guest.config;
+            in
             {
-              name,
-              guest,
-              script,
-              extraExports ? "",
-              extraInputs ? [ ],
-            }:
-            darwinPkgs.writeShellApplication {
-              inherit name;
-              runtimeInputs = [
-                darwinPkgs.vfkit
-                darwinPkgs.coreutils
-                darwinPkgs.curl
-                darwinPkgs.gnugrep
-                darwinPkgs.gnused
-                darwinPkgs.findutils
-                darwinPkgs.e2fsprogs
-                darwinPkgs.openssh
-                darwinPkgs.nix
-              ]
-              ++ extraInputs;
-              text = ''
-                export KERNEL=${darwinPkgs.lib.escapeShellArg "${guest.config.system.build.kernel}/${guest.config.system.boot.loader.kernelFile}"}
-                export INITRD=${darwinPkgs.lib.escapeShellArg "${guest.config.system.build.netbootRamdisk}/initrd"}
-                export TOPLEVEL=${darwinPkgs.lib.escapeShellArg "${guest.config.system.build.toplevel}"}
-                ${extraExports}
-                exec bash ${script} "$@"
-              '';
+              kernel = "${cfg.system.build.kernel}/${cfg.system.boot.loader.kernelFile}";
+              initrd = "${cfg.system.build.netbootRamdisk}/initrd";
+              toplevel = "${cfg.system.build.toplevel}";
             };
-          spike-a = mkSpike {
-            name = "spike-a";
-            guest = guestA;
-            script = ./nix/spike-a.sh;
-          };
-          spike-b = mkSpike {
-            name = "spike-b";
-            guest = guestB;
-            script = ./nix/spike-b.sh;
-            extraExports = ''
-              export HELLO=${darwinPkgs.lib.escapeShellArg "${hello}"}
-              export SPIKE_B_KEY_SRC=${darwinPkgs.lib.escapeShellArg "${./nix/spike-b/id_ed25519}"}
-            '';
-          };
+          bootA = guestBoot guestA;
+          bootB = guestBoot guestB;
+          spike-a = darwinPkgs.callPackage ./nix/spike-a.nix bootA;
+          spike-b = darwinPkgs.callPackage ./nix/spike-b.nix (
+            bootB
+            // {
+              hello = "${self.packages.${linux}.hello}";
+              spikeKey = "${./nix/spike-b/id_ed25519}";
+            }
+          );
         in
         {
           inherit spike-a spike-b;
