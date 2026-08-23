@@ -10,9 +10,10 @@ Snowbox runs a coding Agent inside an isolated Nix-built Linux Sandbox on the Ho
 ## How to work here
 
 - Enter the env with `devenv shell -- <cmd>`. Do not use host Python/Node/toolchains. Rust is `languages.rust` in devenv. The Canvas JS toolchain is Bun (`languages.javascript.bun`), not npm.
+- Run the Daemon with `devenv shell -- cargo run -p snowbox` (or `devenv up`). That is how v1 starts. `flake.nix` is empty until we package for `nix run`.
 - The Daemon is Rust. Nix store/flake work goes through [nix-bindings-rust](https://github.com/nixops4/nix-bindings-rust), not the `nix` CLI ([0019](docs/adr/0019-daemon-is-rust.md)). Host glue that is not the Daemon stays **inline in Nix**. Do not add standalone `.sh` files.
 - The bundled UI is a Solid 2 + Vite + Tailwind SPA built with Bun and served by the Daemon, a client of the documented API ([0021](docs/adr/0021-ui-is-a-solid-spa.md)). The GUI is a Canvas of Windows ([0020](docs/adr/0020-gui-is-a-canvas-of-windows.md)).
-- Layout: `flake.nix` is the flake; `devenv.nix` is the Host shell.
+- Layout: `devenv.nix` is the Host shell. `flake.nix` is future `nix run` packaging, not how you run today. `daemon/` is the Rust Daemon.
 
 ## Invariants
 

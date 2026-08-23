@@ -1,0 +1,91 @@
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
+
+use anyhow::{Context, Result};
+use axum::{http::header, response::Html, routing::get, Router};
+use rand::Rng;
+
+fn bind_addr() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], 5418))
+}
+
+const FALLBACK_CANVAS: &str = r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>snowbox</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #0c0c0e; color: #8a8a93; font: 13px/1.4 ui-sans-serif, system-ui, sans-serif; }
+      .canvas { height: 100%; }
+      .mark { position: fixed; top: 12px; left: 14px; color: #c8c8ce; letter-spacing: 0.04em; }
+    </style>
+  </head>
+  <body>
+    <div class="canvas">
+      <div class="mark">snowbox</div>
+    </div>
+  </body>
+</html>
+"#;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let token_path = token_path()?;
+    ensure_token(&token_path)?;
+
+    let app = Router::new()
+        .route("/api/health", get(health))
+        .fallback(canvas);
+
+    let bind = bind_addr();
+    let listener = tokio::net::TcpListener::bind(bind)
+        .await
+        .with_context(|| format!("bind {bind}"))?;
+
+    let url = format!("http://{bind}/");
+    eprintln!("snowbox {url}");
+    eprintln!("token {}", token_path.display());
+    open_browser(&url);
+
+    axum::serve(listener, app)
+        .await
+        .context("serve")?;
+    Ok(())
+}
+
+async fn health() -> ([(header::HeaderName, &'static str); 1], &'static str) {
+    ([(header::CONTENT_TYPE, "application/json")], r#"{"ok":true}"#)
+}
+
+async fn canvas() -> Html<&'static str> {
+    Html(FALLBACK_CANVAS)
+}
+
+fn token_path() -> Result<PathBuf> {
+    let base = dirs::config_dir().context("no config directory")?;
+    Ok(base.join("snowbox").join("token"))
+}
+
+fn ensure_token(path: &Path) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
+    }
+    let bytes: [u8; 32] = rand::rng().random();
+    std::fs::write(path, hex::encode(bytes)).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
+fn open_browser(url: &str) {
+    let cmd = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(cmd).arg(url).spawn();
+}

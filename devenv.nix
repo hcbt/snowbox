@@ -21,6 +21,8 @@
     pkgs.vfkit
   ];
 
+  processes.snowbox.exec = "cargo run -p snowbox";
+
   git-hooks.package = pkgs.prek;
   git-hooks.hooks = {
     nixfmt-rfc-style.enable = true;
