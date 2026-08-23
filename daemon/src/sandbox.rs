@@ -703,7 +703,7 @@ mod tests {
         let (_tmp, store) = store();
         let sb = store.create(None).unwrap();
         let flake = fs::read_to_string(store.dir(sb.id).join("environment/flake.nix")).unwrap();
-        assert!(flake.contains("nixos-26.05"));
+        assert!(flake.contains("nixos-unstable"));
         assert!(!store.dir(sb.id).join("workspace/flake.nix").exists());
     }
 

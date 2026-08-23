@@ -68,9 +68,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_flake_is_nixos_26_05() {
-        assert!(DEFAULT_FLAKE.contains("nixos-26.05"));
-        assert!(!DEFAULT_FLAKE.to_lowercase().contains("nixos-unstable"));
+    fn default_flake_is_nixos_unstable() {
+        assert!(DEFAULT_FLAKE.contains("nixos-unstable"));
+        assert!(!DEFAULT_FLAKE.contains("nixos-26.05"));
     }
 
     #[test]

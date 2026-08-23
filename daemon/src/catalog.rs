@@ -86,7 +86,7 @@ impl Catalog {
             }
         }
         if let Some(cache) = &self.cache_file {
-            if cache.is_file() {
+            if cache_matches_flake(cache, self.flake_dir.as_deref()) {
                 if let Ok(entries) = load_cache(cache) {
                     self.install(entries)?;
                     return Ok(());
@@ -99,6 +99,9 @@ impl Catalog {
         let entries = load_all(dir)?;
         if let Some(cache) = &self.cache_file {
             let _ = std::fs::write(cache, serde_json::to_vec(&entries).unwrap_or_default());
+            if let Some(key) = flake_lock_key(dir) {
+                let _ = std::fs::write(stamp_path(cache), key);
+            }
         }
         self.install(entries)
     }
@@ -143,6 +146,25 @@ fn guest_system() -> &'static str {
     } else {
         "x86_64-linux"
     }
+}
+
+fn stamp_path(cache: &Path) -> PathBuf {
+    cache.with_extension("src")
+}
+
+fn flake_lock_key(flake_dir: &Path) -> Option<String> {
+    std::fs::read_to_string(flake_dir.join("flake.lock")).ok()
+}
+
+fn cache_matches_flake(cache: &Path, flake_dir: Option<&Path>) -> bool {
+    let Some(dir) = flake_dir else {
+        return cache.is_file();
+    };
+    let Some(key) = flake_lock_key(dir) else {
+        return false;
+    };
+    cache.is_file()
+        && std::fs::read_to_string(stamp_path(cache)).ok().as_deref() == Some(key.as_str())
 }
 
 fn load_cache(path: &Path) -> Result<Vec<Package>, ActionError> {
@@ -241,5 +263,19 @@ mod tests {
             cat().search("  ", false, 10),
             Err(ActionError::BadRequest(_))
         ));
+    }
+
+    #[test]
+    fn catalog_cache_follows_flake_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let flake = dir.path().join("flake");
+        std::fs::create_dir(&flake).unwrap();
+        std::fs::write(flake.join("flake.lock"), b"lock-a").unwrap();
+        let cache = dir.path().join("catalog.json");
+        std::fs::write(&cache, b"[]").unwrap();
+        std::fs::write(stamp_path(&cache), b"lock-a").unwrap();
+        assert!(cache_matches_flake(&cache, Some(&flake)));
+        std::fs::write(flake.join("flake.lock"), b"lock-b").unwrap();
+        assert!(!cache_matches_flake(&cache, Some(&flake)));
     }
 }
