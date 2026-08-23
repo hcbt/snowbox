@@ -133,7 +133,7 @@ export function App() {
 
   const drag = (
     e: MouseEvent,
-    kind: "move" | "resize" | "icons",
+    kind: "move" | "resize" | "resize-e" | "resize-s" | "icons",
     id?: string,
   ) => {
     e.preventDefault();
@@ -172,8 +172,8 @@ export function App() {
         patchWin(win.id, { x: x + dx, y: y + dy });
       } else {
         patchWin(win.id, {
-          w: Math.max(180, w + dx),
-          h: Math.max(80, h + dy),
+          w: Math.max(180, kind === "resize-s" ? w : w + dx),
+          h: Math.max(80, kind === "resize-e" ? h : h + dy),
         });
       }
     };
@@ -251,25 +251,25 @@ export function App() {
               onMouseDown={() => raise(w().id)}
             >
               <div
-                class="flex h-5 shrink-0 cursor-grab items-center gap-1.5 bg-twm px-[3px] text-[13px] font-bold text-white active:cursor-grabbing"
+                class="flex h-5 shrink-0 cursor-grab items-center gap-1 bg-twm px-[3px] text-[13px] font-bold text-white active:cursor-grabbing"
                 onMouseDown={(e) => drag(e, "move", w().id)}
               >
                 <span class="relative size-3 shrink-0 border border-white bg-twm-hi">
                   <span class="absolute top-[3px] left-[3px] size-1.5 bg-white" />
                 </span>
-                <span class="flex-1 overflow-hidden whitespace-nowrap">
+                <span class="min-w-0 flex-1 overflow-hidden whitespace-nowrap">
                   {w().title}
                 </span>
                 <button
                   type="button"
-                  class="relative size-3.5 shrink-0 border border-white bg-twm"
+                  class="relative size-3 shrink-0 border border-white bg-twm"
                   title="Iconify"
                   onClick={(e) => {
                     e.stopPropagation();
                     patchWin(w().id, { iconified: true }, true);
                   }}
                 >
-                  <span class="absolute right-0.5 bottom-[3px] left-0.5 h-0.5 bg-white" />
+                  <span class="absolute right-[2px] bottom-[3px] left-[2px] h-0.5 bg-white" />
                 </button>
               </div>
               <div class="relative min-h-0 flex-1 border-x-2 border-b-2 border-twm bg-white">
@@ -279,7 +279,15 @@ export function App() {
                   onActivate={() => raise(w().id)}
                 />
                 <div
-                  class="absolute right-0 bottom-0 size-3 cursor-se-resize"
+                  class="absolute top-0 right-0 z-20 h-full w-2 cursor-e-resize"
+                  onMouseDown={(e) => drag(e, "resize-e", w().id)}
+                />
+                <div
+                  class="absolute bottom-0 left-0 z-20 h-2 w-full cursor-s-resize"
+                  onMouseDown={(e) => drag(e, "resize-s", w().id)}
+                />
+                <div
+                  class="absolute right-0 bottom-0 z-30 size-4 cursor-se-resize"
                   onMouseDown={(e) => drag(e, "resize", w().id)}
                 />
               </div>
@@ -609,7 +617,11 @@ function OverlayDialog(props: {
       <div class="flex h-5 items-center gap-1.5 bg-twm px-[3px] text-[13px] font-bold text-white">
         <span class="size-3 shrink-0 border border-white bg-twm-hi" />
         <span class="flex-1">{title}</span>
-        <button type="button" class="px-1 text-white" onClick={props.close}>
+        <button
+          type="button"
+          class="flex size-3 shrink-0 items-center justify-center border border-white text-[11px] leading-none text-white"
+          onClick={props.close}
+        >
           ×
         </button>
       </div>
