@@ -1,6 +1,18 @@
 # Host-side shell. Everyday utilities are pinned so `nix develop` /
 # `devenv shell` do not fall through to Homebrew.
 { pkgs, ... }:
+let
+  # Canvas + guest (if missing) + Daemon. `devenv up` / `devenv shell -- snowbox`.
+  stack = ''
+    set -euo pipefail
+    if [ ! -f guest/result/root.raw ]; then
+      nix build path:./guest#packages.aarch64-linux.runtime --out-link guest/result
+    fi
+    ( cd canvas && bun install && bun run build )
+    export SNOWBOX_RUNTIME="$PWD/guest/result"
+    exec cargo run -p snowbox
+  '';
+in
 {
   languages.rust.enable = true;
 
@@ -24,7 +36,8 @@
 
   env.LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
-  processes.snowbox.exec = "cargo run -p snowbox";
+  processes.snowbox.exec = stack;
+  scripts.snowbox.exec = stack;
 
   scripts.canvas.exec = "cd canvas && bun install && bun run build";
 
