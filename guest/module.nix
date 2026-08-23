@@ -50,6 +50,9 @@
       imports = [ (modulesPath + "/image/repart.nix") ];
       image.repart = {
         name = "snowbox";
+        # Without this, systemd-repart formats a 1 TiB ext4 (67M inodes)
+        # before Minimize. The Daemon grows the disk to the Sandbox Limit.
+        imageSize = "4G";
         partitions."10-root" = {
           storePaths = [ config.system.build.toplevel ];
           repartConfig = {
@@ -57,6 +60,7 @@
             Format = "ext4";
             Label = "nixos";
             Minimize = "guess";
+            SizeMaxBytes = "4G";
           };
         };
       };
