@@ -426,7 +426,7 @@ fn boot(
     match outcome {
         Ok(Ok(sandbox)) => {
             resume.mark(id);
-            kick_replenish(vmm, store.root().to_path_buf());
+            kick_replenish(vmm, cache, store.root().to_path_buf());
             Ok(sandbox)
         }
         Ok(Err(err)) => {
@@ -453,7 +453,7 @@ fn boot_claimed(
     let dir = store.dir(id);
     let hatching = !dir.join("disk").join("root.raw").is_file() && !dir.join(SAVE_NAME).is_file();
     if hatching {
-        replenish_ready(vmm, store.root());
+        wait_ready_snapshot(vmm, cache, store.root());
     }
     let kind = vmm
         .start(id, &dir, sandbox.limits)
@@ -544,18 +544,18 @@ fn halt(
     store.stop(id)
 }
 
-fn kick_replenish(vmm: Arc<Hypervisor>, sandboxes: PathBuf) {
-    std::thread::spawn(move || replenish_ready(&vmm, &sandboxes));
+fn kick_replenish(vmm: Arc<Hypervisor>, cache: Arc<Cache>, sandboxes: PathBuf) {
+    std::thread::spawn(move || wait_ready_snapshot(&vmm, &cache, &sandboxes));
 }
 
-fn replenish_ready(vmm: &Hypervisor, sandboxes: &std::path::Path) {
+fn wait_ready_snapshot(vmm: &Hypervisor, cache: &Cache, sandboxes: &std::path::Path) {
     crate::ready::ensure(
         || vmm.ready_snapshot_exists(sandboxes),
-        || warm_once(vmm, sandboxes),
+        || warm_once(vmm, cache, sandboxes),
     );
 }
 
-fn warm_once(vmm: &Hypervisor, sandboxes: &std::path::Path) -> Result<(), String> {
+fn warm_once(vmm: &Hypervisor, cache: &Cache, sandboxes: &std::path::Path) -> Result<(), String> {
     eprintln!("ready snapshot: warming");
     let dir = sandboxes.join(".warm");
     let _ = std::fs::remove_dir_all(&dir);
@@ -565,6 +565,7 @@ fn warm_once(vmm: &Hypervisor, sandboxes: &std::path::Path) -> Result<(), String
         crate::environment::write_default(&dir).map_err(|e| e.to_string())?;
         vmm.start_cold(id, &dir, Limits::default())?;
         crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(90))?;
+        apply_env_at(&dir, cache, vmm, id).map_err(|e| e.to_string())?;
         vmm.save_and_stop(id, &dir.join(SAVE_NAME))?;
         Ok::<(), String>(())
     })();
@@ -580,8 +581,9 @@ pub fn resume_and_warm(state: AppState) {
         let Some(vmm) = state.vmm.clone() else {
             return;
         };
+        let cache = state.cache.clone();
         let root = state.store.root().to_path_buf();
-        let _ = tokio::task::spawn_blocking(move || replenish_ready(&vmm, &root)).await;
+        let _ = tokio::task::spawn_blocking(move || wait_ready_snapshot(&vmm, &cache, &root)).await;
     });
 }
 

@@ -1,5 +1,5 @@
-//! One pre-booted snapshot at a time. New Sandbox waits for it
-//! instead of cold-booting.
+//! One pre-booted snapshot. New Sandbox waits for it instead of
+//! cold-booting. After it is consumed, a replacement is warmed.
 
 use std::sync::{Condvar, Mutex};
 
@@ -10,7 +10,7 @@ struct Gate {
 static GATE: Mutex<Gate> = Mutex::new(Gate { busy: false });
 static CV: Condvar = Condvar::new();
 
-pub fn ensure(exists: impl Fn() -> bool, warm: impl FnOnce() -> Result<(), String>) {
+pub fn ensure(exists: impl Fn() -> bool, warm: impl Fn() -> Result<(), String>) {
     loop {
         if exists() {
             return;
@@ -27,8 +27,8 @@ pub fn ensure(exists: impl Fn() -> bool, warm: impl FnOnce() -> Result<(), Strin
         CV.notify_all();
         if let Err(e) = result {
             eprintln!("ready snapshot: warm failed ({e})");
+            return;
         }
-        return;
     }
 }
 
