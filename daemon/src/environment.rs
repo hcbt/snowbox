@@ -8,6 +8,18 @@ use std::path::Path;
 
 use crate::sandbox::ActionError;
 
+pub fn write_env_dir(dest: &Path, src: &Path) -> Result<(), ActionError> {
+    std::fs::create_dir_all(dest).map_err(|_| ActionError::Internal)?;
+    for f in ["flake.nix", "flake.lock", "packages.json"] {
+        std::fs::copy(src.join(f), dest.join(f)).map_err(|_| ActionError::Internal)?;
+    }
+    Ok(())
+}
+
+pub fn write_from_template(sandbox: &Path, template: &Path) -> Result<(), ActionError> {
+    write_env_dir(&sandbox.join("environment"), template)
+}
+
 pub fn write_default(dir: &Path) -> Result<(), ActionError> {
     let env_dir = dir.join("environment");
     std::fs::create_dir_all(&env_dir).map_err(|_| ActionError::Internal)?;

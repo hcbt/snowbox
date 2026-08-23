@@ -5,6 +5,7 @@ import {
   type Layout,
   type PackageHit,
   type Sandbox,
+  type Template,
   type WindowRec,
 } from "./api";
 
@@ -13,6 +14,7 @@ type Overlay =
   | { kind: "sandbox" }
   | { kind: "limits"; id: string }
   | { kind: "packages"; id: string }
+  | { kind: "save-template"; id: string }
   | { kind: "copy"; id: string; dir: "in" | "out" };
 
 type Menu = { x: number; y: number } | null;
@@ -123,15 +125,6 @@ export function App() {
       return;
     }
     run(async () => {
-      await api.openWindow(sb.id);
-    });
-  };
-
-  const hatch = () => {
-    run(async () => {
-      setStatus("starting…");
-      const sb = await api.create();
-      await api.start(sb.id);
       await api.openWindow(sb.id);
     });
   };
@@ -301,7 +294,11 @@ export function App() {
           hasRunning={running().length > 0}
           iconMgr={layout().icon_manager.visible}
           onNewWindow={newWindow}
-          onNewSandbox={hatch}
+          onNewSandbox={() => setOverlay({ kind: "sandbox" })}
+          onSaveTemplate={() => {
+            const sb = focusedSandbox();
+            if (sb) setOverlay({ kind: "save-template", id: sb.id });
+          }}
           onIconify={() => {
             const id = focus();
             if (id) patchWin(id, { iconified: true }, true);
@@ -388,6 +385,7 @@ function RootMenu(props: {
   iconMgr: boolean;
   onNewWindow: () => void;
   onNewSandbox: () => void;
+  onSaveTemplate: () => void;
   onIconify: () => void;
   onRaise: () => void;
   onLower: () => void;
@@ -412,6 +410,9 @@ function RootMenu(props: {
       <div class="bg-twm-head px-2.5 py-0.5 font-bold text-twm">snowbox</div>
       <button type="button" class={item} onClick={() => { props.onNewSandbox(); props.close(); }}>
         New Sandbox
+      </button>
+      <button type="button" class={item} disabled={!props.sandbox} onClick={() => { props.onSaveTemplate(); props.close(); }}>
+        Save Template…
       </button>
       <button
         type="button"
@@ -494,6 +495,8 @@ function OverlayDialog(props: {
   const [disk, setDisk] = createSignal(
     String((props.sandbox?.limits.disk ?? 17179869184) / (1024 * 1024 * 1024)),
   );
+  const [tpl, setTpl] = createSignal("empty");
+  const [templates, setTemplates] = createSignal<Template[]>([]);
   const [pkg, setPkg] = createSignal("");
   const [unfree, setUnfree] = createSignal(false);
   const [hits, setHits] = createSignal<PackageHit[]>([]);
@@ -502,6 +505,9 @@ function OverlayDialog(props: {
   const [replace, setReplace] = createSignal(false);
 
   onSettled(() => {
+    if (props.overlay.kind === "sandbox" || props.overlay.kind === "save-template") {
+      api.templates().then((r) => setTemplates(r.templates)).catch(() => {});
+    }
     if (props.overlay.kind !== "packages" || !props.sandbox) return;
     api
       .packages(props.sandbox.id)
@@ -529,6 +535,8 @@ function OverlayDialog(props: {
         ? "Limits"
         : props.overlay.kind === "packages"
           ? "Packages"
+          : props.overlay.kind === "save-template"
+            ? "Save Template"
           : props.overlay.kind === "copy" && props.overlay.dir === "in"
             ? "Copy in"
             : "Copy out";
@@ -536,7 +544,14 @@ function OverlayDialog(props: {
   const submit = () => {
     const ov = props.overlay;
     if (ov.kind === "sandbox") {
-      props.run(() => api.create(name() || undefined));
+      props.run(async () => {
+        const sb = await api.create(name() || undefined, tpl() || undefined);
+        await api.start(sb.id);
+        await api.openWindow(sb.id);
+      });
+    } else if (ov.kind === "save-template") {
+      if (!name().trim()) return;
+      props.run(() => api.saveTemplate(name().trim(), ov.id));
     } else if (ov.kind === "limits") {
       props.run(() =>
         api.patchLimits(ov.id, {
@@ -583,6 +598,29 @@ function OverlayDialog(props: {
         }}
       >
         <Show when={props.overlay.kind === "sandbox"}>
+          <label class={label}>
+            name
+            <input class={field} value={name()} onInput={(e) => setName(e.currentTarget.value)} />
+          </label>
+          <label class={label}>
+            template
+            <select
+              class={field}
+              value={tpl()}
+              onChange={(e) => setTpl(e.currentTarget.value)}
+            >
+              <For each={templates()}>
+                {(t) => (
+                  <option value={t.name}>
+                    {t.name}
+                    {t.shipped ? "" : " (saved)"}
+                  </option>
+                )}
+              </For>
+            </select>
+          </label>
+        </Show>
+        <Show when={props.overlay.kind === "save-template"}>
           <label class={label}>
             name
             <input class={field} value={name()} onInput={(e) => setName(e.currentTarget.value)} />

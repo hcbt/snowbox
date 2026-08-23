@@ -32,7 +32,9 @@ Reset restores the system (drops the writable guest disk so the next start is a 
 | --- | --- | --- |
 | `GET` | `/health` | `{"ok":true}` |
 | `GET` | `/sandboxes` | List |
-| `POST` | `/sandboxes` | Create. Body `{"name": "...", "limits": {...}}` — both optional. `201` |
+| `POST` | `/sandboxes` | Create. Body `{"name": "...", "limits": {...}, "template": "python"}` — all optional. `template` is a Template name. `201` |
+| `GET` | `/templates` | Shipped and saved Templates. |
+| `POST` | `/templates` | Save the current Environment as a Template. Body `{"name":"work","sandbox":"<id>"}`. `201`. Cannot overwrite a shipped Template. |
 | `GET` | `/sandboxes/{id}` | One record. `404` if missing |
 | `PATCH` | `/sandboxes/{id}` | Update Limits. Body `{"limits":{"cpu":4,"ram":4294967296,"disk":34359738368}}` — any field optional. Applied on the next start. `404` if missing |
 | `POST` | `/sandboxes/{id}/start` | `stopped` → `running`. Restores machine state when present, otherwise boots. `409` if already running |

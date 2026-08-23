@@ -26,6 +26,7 @@ mod pty;
 mod runtime;
 mod sandbox;
 mod sign;
+mod templates;
 mod vz;
 
 const FALLBACK_CANVAS: &str = r#"<!doctype html>
@@ -102,6 +103,10 @@ async fn run_daemon() -> Result<()> {
             catalog_flake,
             data.join("catalog.json"),
         )),
+        templates: Arc::new(templates::Library {
+            shipped: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../templates"),
+            user: data.join("templates"),
+        }),
         vmm,
     };
     let app = with_ui(api::router(state.clone()), state.clone()).layer(

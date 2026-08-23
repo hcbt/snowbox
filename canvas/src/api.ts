@@ -8,6 +8,8 @@ export type Sandbox = {
   limits: Limits;
 };
 
+export type Template = { name: string; shipped: boolean };
+
 export type PackageHit = {
   name: string;
   program: string;
@@ -56,10 +58,19 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   sandboxes: () => json<{ sandboxes: Sandbox[] }>("/api/v1/sandboxes"),
-  create: (name?: string) =>
+  create: (name?: string, template?: string) =>
     json<Sandbox>("/api/v1/sandboxes", {
       method: "POST",
-      body: JSON.stringify(name ? { name } : {}),
+      body: JSON.stringify({
+        ...(name ? { name } : {}),
+        ...(template ? { template } : {}),
+      }),
+    }),
+  templates: () => json<{ templates: Template[] }>("/api/v1/templates"),
+  saveTemplate: (name: string, sandbox: string) =>
+    json<Template>("/api/v1/templates", {
+      method: "POST",
+      body: JSON.stringify({ name, sandbox }),
     }),
   start: (id: string) =>
     json<Sandbox>(`/api/v1/sandboxes/${id}/start`, { method: "POST" }),

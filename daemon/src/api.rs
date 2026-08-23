@@ -16,6 +16,7 @@ use crate::cache::Cache;
 use crate::catalog::Catalog;
 use crate::layout::{Layout, LayoutStore};
 use crate::sandbox::{ActionError, Limits, State as SandboxState, Store};
+use crate::templates::Library;
 use crate::vz::Hypervisor;
 
 #[derive(Clone)]
@@ -25,6 +26,7 @@ pub struct AppState {
     pub cache: Arc<Cache>,
     pub layout: Arc<LayoutStore>,
     pub catalog: Arc<Catalog>,
+    pub templates: Arc<Library>,
     pub vmm: Option<Arc<Hypervisor>>,
 }
 
@@ -33,6 +35,7 @@ pub struct CreateBody {
     pub name: Option<String>,
     #[serde(default)]
     pub limits: LimitsPatch,
+    pub template: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -95,6 +98,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sandboxes/{id}/copy-in", post(copy_in))
         .route("/sandboxes/{id}/copy-out", post(copy_out))
         .route("/packages", get(search_packages))
+        .route("/templates", get(list_templates).post(save_template))
         .route(
             "/sandboxes/{id}/packages",
             get(list_packages).post(add_package),
@@ -122,9 +126,13 @@ async fn create(
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let body = body.map(|Json(b)| b).unwrap_or_default();
     let limits = body.limits.apply(Limits::default());
+    let template = match body.template.as_deref() {
+        None | Some("") | Some("empty") => None,
+        Some(name) => Some(state.templates.resolve(name).map_err(map_err)?),
+    };
     let sandbox = state
         .store
-        .create_with(body.name, limits)
+        .create_with(body.name, limits, template.as_deref())
         .map_err(map_err)?;
     Ok((
         StatusCode::CREATED,
@@ -226,6 +234,32 @@ async fn copy_out(
     Json(body): Json<CopyOutBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     action(state.store.copy_out(id, &body.to, body.replace))
+}
+
+#[derive(Deserialize)]
+pub struct SaveTemplateBody {
+    pub name: String,
+    pub sandbox: Uuid,
+}
+
+async fn list_templates(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let list = state.templates.list().map_err(map_err)?;
+    Ok(Json(serde_json::json!({ "templates": list })))
+}
+
+async fn save_template(
+    State(state): State<AppState>,
+    Json(body): Json<SaveTemplateBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let _ = state.store.get(body.sandbox).map_err(map_err)?;
+    let env = state.store.dir(body.sandbox).join("environment");
+    let t = state.templates.save(&body.name, &env).map_err(map_err)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::to_value(t).expect("template json")),
+    ))
 }
 
 async fn search_packages(
@@ -469,6 +503,10 @@ mod tests {
             store: Arc::new(Store::open(dir.path()).unwrap()),
             cache: Arc::new(Cache::open(dir.path().join("cache")).unwrap()),
             layout: Arc::new(LayoutStore::open(dir.path().join("layout.json")).unwrap()),
+            templates: Arc::new(crate::templates::Library {
+                shipped: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../templates"),
+                user: dir.path().join("templates"),
+            }),
             catalog: Arc::new(crate::catalog::Catalog::memory(vec![
                 crate::catalog::Package {
                     name: "jq".into(),
@@ -753,6 +791,50 @@ mod tests {
                 .iter()
                 .any(|p| p == "jq")
         );
+    }
+
+    #[tokio::test]
+    async fn templates_ship_and_fill_environment() {
+        let (_dir, state) = harness();
+        let make = || router(state.clone());
+        let (status, listed) = send(
+            make(),
+            authed(Request::get("http://127.0.0.1/api/v1/templates"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let names: Vec<&str> = listed["templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"empty"));
+        assert!(names.contains(&"python"));
+        assert!(names.contains(&"rust"));
+
+        let (status, created) = send(
+            make(),
+            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"template":"python"}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = created["id"].as_str().unwrap();
+        let url = format!("http://127.0.0.1/api/v1/sandboxes/{id}/packages");
+        let (status, pkgs) = send(
+            make(),
+            authed(Request::get(&url)).body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let list = pkgs["packages"].as_array().unwrap();
+        assert!(list.iter().any(|p| p == "python3"));
+        assert!(!list.iter().any(|p| p == "hello"));
     }
 
     #[tokio::test]

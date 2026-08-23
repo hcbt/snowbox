@@ -155,13 +155,14 @@ impl Store {
 
     #[cfg(test)]
     pub fn create(&self, name: Option<String>) -> Result<Sandbox, ActionError> {
-        self.create_with(name, Limits::default())
+        self.create_with(name, Limits::default(), None)
     }
 
     pub fn create_with(
         &self,
         name: Option<String>,
         limits: Limits,
+        template: Option<&Path>,
     ) -> Result<Sandbox, ActionError> {
         let limits = limits.validate()?;
         let id = Uuid::new_v4();
@@ -179,7 +180,11 @@ impl Store {
         fs::create_dir_all(dir.join("workspace")).map_err(|_| ActionError::Internal)?;
         fs::create_dir_all(dir.join("home")).map_err(|_| ActionError::Internal)?;
         fs::create_dir_all(dir.join("system")).map_err(|_| ActionError::Internal)?;
-        crate::environment::write_default(&dir)?;
+        if let Some(template) = template {
+            crate::environment::write_from_template(&dir, template)?;
+        } else {
+            crate::environment::write_default(&dir)?;
+        }
         write_meta(&dir, &meta)?;
         let sandbox = view(&Record {
             meta: meta.clone(),
@@ -515,7 +520,9 @@ mod tests {
             ram: 4 * GIB,
             disk: 32 * GIB,
         };
-        let created = store.create_with(Some("work".into()), limits).unwrap();
+        let created = store
+            .create_with(Some("work".into()), limits, None)
+            .unwrap();
         assert_eq!(created.limits, limits);
         drop(store);
 
@@ -534,6 +541,7 @@ mod tests {
                     ram: 2 * GIB,
                     disk: 16 * GIB,
                 },
+                None,
             )
             .unwrap_err();
         assert!(matches!(
@@ -553,6 +561,7 @@ mod tests {
                     ram: 512 * MIB + 1,
                     disk: 16 * GIB,
                 },
+                None,
             )
             .unwrap_err();
         assert!(matches!(
@@ -572,6 +581,7 @@ mod tests {
                     ram: 512 * MIB,
                     disk: GIB - 1,
                 },
+                None,
             )
             .unwrap_err();
         assert!(matches!(
