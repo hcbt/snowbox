@@ -22,6 +22,7 @@ export function Term(props: {
       cursorBlink: true,
       fontFamily: "ui-monospace, Menlo, Monaco, monospace",
       fontSize: 13,
+      scrollback: 5000,
       theme: {
         background: "#ffffff",
         foreground: "#000000",

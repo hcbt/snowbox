@@ -113,6 +113,7 @@ async fn run_daemon() -> Result<()> {
             user: data.join("templates"),
         }),
         publish: publish::Publisher::default(),
+        sessions: pty::Sessions::default(),
         vmm,
     };
     let app = with_ui(api::router(state.clone()), state.clone()).layer(

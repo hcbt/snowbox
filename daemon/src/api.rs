@@ -29,6 +29,7 @@ pub struct AppState {
     pub catalog: Arc<Catalog>,
     pub templates: Arc<Library>,
     pub publish: Publisher,
+    pub sessions: crate::pty::Sessions,
     pub vmm: Option<Arc<Hypervisor>>,
 }
 
@@ -191,6 +192,7 @@ async fn stop(
     if let Some(vmm) = state.vmm.clone() {
         let store = state.store.clone();
         state.publish.drop_sandbox(id);
+        state.sessions.drop_sandbox(id);
         let result = tokio::task::spawn_blocking(move || halt(store, vmm, id))
             .await
             .map_err(|_| ActionError::Internal)
@@ -211,6 +213,8 @@ async fn destroy(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    state.publish.drop_sandbox(id);
+    state.sessions.drop_sandbox(id);
     if let Some(vmm) = state.vmm.clone() {
         let store = state.store.clone();
         let result = tokio::task::spawn_blocking(move || {
@@ -223,11 +227,11 @@ async fn destroy(
         .map_err(|_| ActionError::Internal)
         .and_then(|r| r);
         result.map_err(map_err)?;
-        state.publish.drop_sandbox(id);
         let _ = state.layout.close_sandbox_windows(id);
         return Ok(StatusCode::NO_CONTENT);
     }
     state.publish.drop_sandbox(id);
+    state.sessions.drop_sandbox(id);
     state.store.destroy(id).map_err(map_err)?;
     let _ = state.layout.close_sandbox_windows(id);
     Ok(StatusCode::NO_CONTENT)
@@ -398,6 +402,7 @@ async fn close_window(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     state.layout.close_window(id).map_err(map_err)?;
+    state.sessions.drop_window(id);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -565,6 +570,7 @@ mod tests {
             cache: Arc::new(Cache::open(dir.path().join("cache")).unwrap()),
             layout: Arc::new(LayoutStore::open(dir.path().join("layout.json")).unwrap()),
             publish: crate::publish::Publisher::default(),
+            sessions: crate::pty::Sessions::default(),
             templates: Arc::new(crate::templates::Library {
                 shipped: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../templates"),
                 user: dir.path().join("templates"),

@@ -1,6 +1,8 @@
-@layer theme, components, utilities;
+@layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
+
+@custom-variant hover (&:hover);
 
 @theme {
   --color-twm: #c3366d;
@@ -33,7 +35,7 @@
     margin: 0;
     padding: 0;
     border: none;
-    background: none;
+    background-color: transparent;
     font: inherit;
     color: inherit;
     line-height: 1;
