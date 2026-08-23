@@ -18,6 +18,8 @@ The token is a file in the Host config directory (`snowbox/token` under `dirs::c
 
 Each Sandbox has a disk the Daemon owns on the Host (under the data directory, `snowbox/sandboxes/{id}`). That disk holds Workspace (`/workspace`), Home (allowlist), a system tree, and the Environment flake (a Host document, never `/workspace`). Start boots a Nix-built Linux guest via Virtualization.framework (macOS). The guest root is a copy of the runtime disk; Workspace and Home are synced over vsock, not a Host mount. Quit the Daemon: running guests stop; disks stay. Destroy is the only verb that deletes the Workspace.
 
+Many Sandboxes may run at once. They share Host CPU, RAM, and disk capacity, not a filesystem and not a network: each guest has its own disk and its own NAT. The allowed exception is the Cache (Host-side; the Daemon writes, guests copy).
+
 The Cache is a Snowbox store under the data directory (`snowbox/cache`), a `file://` substituter the Daemon writes. Guests copy from it; they do not share `/nix/store` with the Host.
 
 JSON `state` is `stopped` or `running`. `home` is the allowlist of paths under the guest home that survive Reset. v1 default: `.gitconfig`. `limits` are per-Sandbox CPU count, RAM bytes, and disk bytes. Defaults: 2 CPUs, 2 GiB RAM, 16 GiB disk. Set at create; PATCH later. CPU and RAM take effect at start. Disk is the guest root image size on the Host; growing applies at start, shrinking needs Reset first.

@@ -80,6 +80,7 @@ struct Meta {
 struct Record {
     meta: Meta,
     state: State,
+    booting: bool,
 }
 
 #[derive(Debug)]
@@ -135,6 +136,7 @@ impl Store {
                 Record {
                     meta,
                     state: State::Stopped,
+                    booting: false,
                 },
             );
         }
@@ -182,12 +184,14 @@ impl Store {
         let sandbox = view(&Record {
             meta: meta.clone(),
             state: State::Stopped,
+            booting: false,
         });
         self.inner.lock().expect("sandbox store").insert(
             id,
             Record {
                 meta,
                 state: State::Stopped,
+                booting: false,
             },
         );
         Ok(sandbox)
@@ -208,7 +212,31 @@ impl Store {
     }
 
     pub fn start(&self, id: Uuid) -> Result<Sandbox, ActionError> {
-        self.set_state(id, State::Stopped, State::Running, "already running")
+        let mut map = self.inner.lock().expect("sandbox store");
+        let rec = map.get_mut(&id).ok_or(ActionError::NotFound)?;
+        if rec.state == State::Running {
+            return Err(ActionError::Conflict("already running"));
+        }
+        rec.booting = false;
+        rec.state = State::Running;
+        Ok(view(rec))
+    }
+
+    pub fn begin_boot(&self, id: Uuid) -> Result<(), ActionError> {
+        let mut map = self.inner.lock().expect("sandbox store");
+        let rec = map.get_mut(&id).ok_or(ActionError::NotFound)?;
+        if rec.state == State::Running || rec.booting {
+            return Err(ActionError::Conflict("already running"));
+        }
+        rec.booting = true;
+        Ok(())
+    }
+
+    pub fn abort_boot(&self, id: Uuid) {
+        let mut map = self.inner.lock().expect("sandbox store");
+        if let Some(rec) = map.get_mut(&id) {
+            rec.booting = false;
+        }
     }
 
     pub fn stop(&self, id: Uuid) -> Result<Sandbox, ActionError> {
@@ -297,6 +325,7 @@ impl Store {
         if rec.state != from {
             return Err(ActionError::Conflict(conflict));
         }
+        rec.booting = false;
         rec.state = to;
         Ok(view(rec))
     }
@@ -666,6 +695,44 @@ mod tests {
         let flake = fs::read_to_string(store.dir(sb.id).join("environment/flake.nix")).unwrap();
         assert!(flake.contains("nixos-26.05"));
         assert!(!store.dir(sb.id).join("workspace/flake.nix").exists());
+    }
+
+    #[test]
+    fn workspaces_are_not_shared() {
+        let (_tmp, store) = store();
+        let a = store.create(Some("a".into())).unwrap();
+        let b = store.create(Some("b".into())).unwrap();
+        fs::write(store.dir(a.id).join("workspace/secret"), "only-a").unwrap();
+        assert!(!store.dir(b.id).join("workspace/secret").exists());
+        assert_ne!(store.dir(a.id), store.dir(b.id));
+    }
+
+    #[test]
+    fn begin_boot_rejects_a_second_start() {
+        let (_tmp, store) = store();
+        let sb = store.create(None).unwrap();
+        store.begin_boot(sb.id).unwrap();
+        let err = store.begin_boot(sb.id).unwrap_err();
+        assert!(matches!(err, ActionError::Conflict("already running")));
+        store.abort_boot(sb.id);
+        store.begin_boot(sb.id).unwrap();
+    }
+
+    #[test]
+    fn destroy_one_keeps_the_other() {
+        let (_tmp, store) = store();
+        let a = store.create(Some("keep-a".into())).unwrap();
+        let b = store.create(Some("drop-b".into())).unwrap();
+        fs::write(store.dir(a.id).join("workspace/x"), "a").unwrap();
+        store.destroy(b.id).unwrap();
+        assert_eq!(
+            fs::read_to_string(store.dir(a.id).join("workspace/x")).unwrap(),
+            "a"
+        );
+        assert!(matches!(
+            store.get(b.id).unwrap_err(),
+            ActionError::NotFound
+        ));
     }
 
     #[test]

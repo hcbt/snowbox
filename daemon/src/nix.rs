@@ -32,7 +32,10 @@ fn path_flake_url(path: &Path) -> String {
     enc
 }
 
+static REALIZE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn realize_environment(flake_dir: &Path, cache: &Cache) -> Result<Realized, ActionError> {
+    let _realize = REALIZE.lock().map_err(|_| ActionError::Internal)?;
     eval_state::init().map_err(|e| ActionError::Failed(e.to_string()))?;
     let _gc = gc_register_my_thread().map_err(|e| ActionError::Failed(e.to_string()))?;
     let _ = nix_bindings_util::settings::set("experimental-features", "nix-command flakes");

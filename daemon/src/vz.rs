@@ -7,6 +7,16 @@ use crate::runtime::Runtime;
 use crate::sandbox::Limits;
 
 pub const AGENT_PORT: u32 = 52;
+
+/// Locally administered unicast MAC derived from the Sandbox id so
+/// concurrent guests do not share an ethernet address.
+pub fn mac_address(id: Uuid) -> String {
+    let b = id.as_bytes();
+    format!(
+        "02:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        b[0], b[1], b[2], b[3], b[4]
+    )
+}
 const START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
@@ -88,6 +98,93 @@ pub fn prepare_root_disk(
     Ok(root)
 }
 
+/// One NAT network per Sandbox. Shared-mode vmnet lets guests reach the
+/// internet through the Host; a distinct network object means they cannot
+/// reach each other.
+#[cfg(target_os = "macos")]
+fn attach_isolated_network(
+    net: &objc2_virtualization::VZVirtioNetworkDeviceConfiguration,
+    id: Uuid,
+) -> Result<(), String> {
+    use std::ffi::c_void;
+
+    use objc2::AnyThread;
+    use objc2::ClassType;
+    use objc2::encode::{Encoding, RefEncode};
+    use objc2::rc::Retained;
+    use objc2_foundation::NSString;
+    use objc2_virtualization::{VZMACAddress, VZVmnetNetworkDeviceAttachment};
+
+    const VMNET_SHARED_MODE: u32 = 1001;
+
+    #[repr(C)]
+    struct vmnet_network {
+        _priv: [u8; 0],
+    }
+
+    unsafe impl RefEncode for vmnet_network {
+        const ENCODING_REF: Encoding = Encoding::Pointer(&Encoding::Struct("vmnet_network", &[]));
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(cf: *const c_void);
+    }
+
+    type CreateConfig = unsafe extern "C" fn(u32, *mut u32) -> *mut c_void;
+    type CreateNetwork = unsafe extern "C" fn(*mut c_void, *mut u32) -> *mut vmnet_network;
+
+    unsafe fn vmnet_sym<T>(name: &std::ffi::CStr) -> Result<T, String> {
+        let handle = unsafe {
+            libc::dlopen(
+                c"/System/Library/Frameworks/vmnet.framework/vmnet".as_ptr(),
+                libc::RTLD_LAZY | libc::RTLD_LOCAL,
+            )
+        };
+        if handle.is_null() {
+            return Err("dlopen vmnet failed".into());
+        }
+        let ptr = unsafe { libc::dlsym(handle, name.as_ptr()) };
+        if ptr.is_null() {
+            return Err(format!("vmnet missing {}", name.to_string_lossy()));
+        }
+        Ok(unsafe { std::mem::transmute_copy(&ptr) })
+    }
+
+    unsafe {
+        let create_config: CreateConfig = vmnet_sym(c"vmnet_network_configuration_create")?;
+        let create_network: CreateNetwork = vmnet_sym(c"vmnet_network_create")?;
+        let mut status = 0u32;
+        let config = create_config(VMNET_SHARED_MODE, &mut status);
+        if config.is_null() {
+            return Err(format!("vmnet configuration failed ({status})"));
+        }
+        let network = create_network(config, &mut status);
+        CFRelease(config);
+        if network.is_null() {
+            return Err(format!("vmnet network failed ({status})"));
+        }
+
+        let attachment: Option<Retained<VZVmnetNetworkDeviceAttachment>> = objc2::msg_send![
+            VZVmnetNetworkDeviceAttachment::alloc(),
+            initWithNetwork: network
+        ];
+        let Some(attachment) = attachment else {
+            CFRelease(network.cast());
+            return Err("isolated network attachment failed".into());
+        };
+        let mac = VZMACAddress::initWithString(
+            VZMACAddress::alloc(),
+            &NSString::from_str(&mac_address(id)),
+        )
+        .ok_or_else(|| format!("invalid MAC {}", mac_address(id)))?;
+        net.setMACAddress(&mac);
+        net.setAttachment(Some(attachment.as_super()));
+        CFRelease(network.cast());
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn start_vm(runtime: &Runtime, id: Uuid, sandbox_dir: &Path, limits: Limits) -> Result<(), String> {
     use std::os::fd::IntoRawFd;
@@ -140,7 +237,7 @@ fn start_vm(runtime: &Runtime, id: Uuid, sandbox_dir: &Path, limits: Limits) -> 
         config.setStorageDevices(&NSArray::from_retained_slice(&[Retained::into_super(disk)]));
 
         let net = VZVirtioNetworkDeviceConfiguration::new();
-        net.setAttachment(Some(&VZNATNetworkDeviceAttachment::new()));
+        attach_isolated_network(&net, id)?;
         config.setNetworkDevices(&NSArray::from_retained_slice(&[Retained::into_super(net)]));
 
         config.setEntropyDevices(&NSArray::from_retained_slice(&[Retained::into_super(
@@ -387,6 +484,19 @@ mod tests {
     #[test]
     fn reports_support_without_creating_a_vm() {
         let _ = super::is_supported();
+    }
+
+    #[test]
+    fn mac_address_is_stable_locally_administered_unicast() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let mac = super::mac_address(id);
+        assert_eq!(mac, super::mac_address(id));
+        let other = super::mac_address(uuid::Uuid::nil());
+        assert_ne!(mac, other);
+        let first = u8::from_str_radix(&mac[..2], 16).unwrap();
+        assert_eq!(first & 0x01, 0, "unicast");
+        assert_eq!(first & 0x02, 0x02, "locally administered");
+        assert_eq!(mac.chars().filter(|c| *c == ':').count(), 5);
     }
 
     #[test]

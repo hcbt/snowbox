@@ -247,26 +247,41 @@ fn boot(
     vmm: Arc<Hypervisor>,
     id: Uuid,
 ) -> Result<crate::sandbox::Sandbox, ActionError> {
-    let sandbox = store.get(id)?;
-    if sandbox.state != SandboxState::Stopped {
-        return Err(ActionError::Conflict("already running"));
+    store.begin_boot(id)?;
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        boot_claimed(&store, &cache, &vmm, id)
+    }));
+    match outcome {
+        Ok(Ok(sandbox)) => Ok(sandbox),
+        Ok(Err(err)) => {
+            let _ = vmm.stop(id);
+            store.abort_boot(id);
+            Err(err)
+        }
+        Err(_) => {
+            let _ = vmm.stop(id);
+            store.abort_boot(id);
+            Err(ActionError::Internal)
+        }
     }
+}
+
+fn boot_claimed(
+    store: &Store,
+    cache: &Cache,
+    vmm: &Hypervisor,
+    id: Uuid,
+) -> Result<crate::sandbox::Sandbox, ActionError> {
+    let sandbox = store.get(id)?;
     let dir = store.dir(id);
     vmm.start(id, &dir, sandbox.limits)
         .map_err(ActionError::Failed)?;
-    if let Err(e) = crate::agent::wait_ready(&vmm, id, std::time::Duration::from_secs(90)) {
-        let _ = vmm.stop(id);
-        return Err(ActionError::Failed(e));
-    }
-    if let Err(e) = crate::agent::tar_in(&vmm, id, "/workspace", &dir.join("workspace")) {
-        let _ = vmm.stop(id);
-        return Err(ActionError::Failed(e));
-    }
-    let _ = crate::agent::tar_in(&vmm, id, "/home/snow", &dir.join("home"));
-    if let Err(e) = apply_env(&store, &cache, &vmm, id) {
-        let _ = vmm.stop(id);
-        return Err(e);
-    }
+    crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(90))
+        .map_err(ActionError::Failed)?;
+    crate::agent::tar_in(vmm, id, "/workspace", &dir.join("workspace"))
+        .map_err(ActionError::Failed)?;
+    let _ = crate::agent::tar_in(vmm, id, "/home/snow", &dir.join("home"));
+    apply_env(store, cache, vmm, id)?;
     store.start(id)
 }
 
@@ -607,6 +622,50 @@ mod tests {
                 .iter()
                 .any(|p| p == "jq")
         );
+    }
+
+    #[tokio::test]
+    async fn two_sandboxes_can_run_at_once() {
+        let (_dir, state) = harness();
+        let make = || router(state.clone());
+        let mut ids = Vec::new();
+        for name in ["one", "two"] {
+            let (status, created) = send(
+                make(),
+                authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"name":"{name}"}}"#)))
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED);
+            ids.push(created["id"].as_str().unwrap().to_string());
+        }
+        for id in &ids {
+            let start = format!("http://127.0.0.1/api/v1/sandboxes/{id}/start");
+            let (status, running) = send(
+                make(),
+                authed(Request::post(&start)).body(Body::empty()).unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(running["state"], "running");
+        }
+        let (status, listed) = send(
+            make(),
+            authed(Request::get("http://127.0.0.1/api/v1/sandboxes"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let running = listed["sandboxes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["state"] == "running")
+            .count();
+        assert_eq!(running, 2);
     }
 
     #[tokio::test]
