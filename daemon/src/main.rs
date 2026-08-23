@@ -26,6 +26,7 @@ mod nar;
 mod nix;
 mod pty;
 mod publish;
+mod resume;
 mod runtime;
 mod sandbox;
 mod sign;
@@ -115,6 +116,7 @@ async fn run_daemon() -> Result<()> {
         publish: publish::Publisher::default(),
         sessions: pty::Sessions::default(),
         vmm,
+        resume: Arc::new(resume::Resume::open(data.join("running.json"))),
     };
     let app = with_ui(api::router(state.clone()), state.clone()).layer(
         middleware::from_fn_with_state(state.clone(), attach_session),
@@ -137,8 +139,12 @@ async fn run_daemon() -> Result<()> {
         }
     );
     open_browser(&url);
+    api::resume_and_warm(state.clone());
 
-    axum::serve(listener, app).await.context("serve")?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(api::on_quit(state))
+        .await
+        .context("serve")?;
     Ok(())
 }
 

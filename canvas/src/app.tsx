@@ -214,18 +214,19 @@ export function App() {
             <span class="flex-1">Icon Manager</span>
           </div>
           <div class="border-x-2 border-b-2 border-twm">
-            <For
-              each={layout().windows.filter((w) => live(w.sandbox))}
-              keyed={(w) => w.id}
-            >
+            <For each={layout().windows} keyed={(w) => w.id}>
               {(w) => (
                 <button
                   type="button"
                   class="block w-full border-0 border-t border-twm-line bg-twm px-2 py-0.5 text-left font-bold text-white hover:bg-twm-hi"
-                  classList={{ "bg-twm-hi": focus() === w().id }}
+                  classList={{
+                    "bg-twm-hi": focus() === w().id,
+                    "text-twm-muted": !live(w().sandbox),
+                  }}
                   onClick={() => {
                     patchWin(w().id, { iconified: false }, true);
                     raise(w().id);
+                    if (!live(w().sandbox) && !busy()) run(() => api.start(w().sandbox));
                   }}
                 >
                   {w().title}
@@ -238,7 +239,7 @@ export function App() {
 
       <For each={layout().windows} keyed={(w) => w.id}>
         {(w) => (
-          <Show when={!w().iconified && live(w().sandbox)}>
+          <Show when={!w().iconified}>
             <div
               class="absolute flex min-h-20 min-w-[180px] flex-col"
               style={{
@@ -248,7 +249,10 @@ export function App() {
                 height: `${w().h}px`,
                 "z-index": w().z,
               }}
-              onMouseDown={() => raise(w().id)}
+              onMouseDown={() => {
+                raise(w().id);
+                if (!live(w().sandbox) && !busy()) run(() => api.start(w().sandbox));
+              }}
             >
               <div
                 class="flex h-5 shrink-0 cursor-grab items-center gap-1 bg-twm px-[3px] text-[13px] font-bold text-white active:cursor-grabbing"
@@ -273,11 +277,20 @@ export function App() {
                 </button>
               </div>
               <div class="relative min-h-0 flex-1 border-x-2 border-b-2 border-twm bg-white">
-                <Term
-                  windowId={w().id}
-                  active={focus() === w().id}
-                  onActivate={() => raise(w().id)}
-                />
+                <Show
+                  when={live(w().sandbox)}
+                  fallback={
+                    <div class="flex h-full items-center justify-center font-twm text-[13px] text-neutral-500">
+                      stopped
+                    </div>
+                  }
+                >
+                  <Term
+                    windowId={w().id}
+                    active={focus() === w().id}
+                    onActivate={() => raise(w().id)}
+                  />
+                </Show>
                 <div
                   class="absolute top-0 right-0 z-20 h-full w-2 cursor-e-resize"
                   onMouseDown={(e) => drag(e, "resize-e", w().id)}

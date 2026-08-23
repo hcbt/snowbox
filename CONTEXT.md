@@ -27,7 +27,7 @@ A command that runs *inside* a Sandbox and drives coding work. Not a named vendo
 _Avoid_: bot, assistant, LLM, model, Claude, Grok, Codex (as product nouns)
 
 **Daemon**:
-The Host process that owns Sandboxes and serves the Canvas. Closing the browser does not stop Sandboxes or forget Layout. Quitting the Daemon does. It exposes a documented API on `127.0.0.1`. Callers need a token stored in the user’s config; loopback is not auth. Remote machines are not callers. It is the only writer of the Cache.
+The Host process that owns Sandboxes and serves the Canvas. Closing the browser does not stop Sandboxes or forget Layout. Quitting the Daemon writes machine state and stops running guests; disks, Layout, and that state stay. Starting the Daemon again restores the guests that were running. It exposes a documented API on `127.0.0.1`. Callers need a token stored in the user’s config; loopback is not auth. Remote machines are not callers. It is the only writer of the Cache.
 _Avoid_: server, backend, engine, runtime, app (when you mean this process), platform, cloud
 
 **Cache**:

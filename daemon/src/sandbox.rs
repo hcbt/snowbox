@@ -338,6 +338,10 @@ impl Store {
     pub(crate) fn dir(&self, id: Uuid) -> PathBuf {
         self.root.join(id.to_string())
     }
+
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
 }
 
 fn view(rec: &Record) -> Sandbox {

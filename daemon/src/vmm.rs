@@ -122,6 +122,10 @@ impl Hypervisor {
     pub fn vsock(&self, id: Uuid, port: u32) -> Result<UnixStream, String> {
         self.engine.vsock(id, port)
     }
+
+    pub fn ready_snapshot_exists(&self, sandboxes_root: &Path) -> bool {
+        snapshot_complete(&ready_dir(&sandboxes_root.join("_"), &self.runtime.rootfs))
+    }
 }
 
 impl Control for Hypervisor {
@@ -199,6 +203,7 @@ fn snapshot_complete(dir: &Path) -> bool {
 fn install_ready(sandbox_dir: &Path, runtime: &Path) {
     let ready = ready_dir(sandbox_dir, runtime);
     if !snapshot_complete(&ready) {
+        eprintln!("ready snapshot: none");
         return;
     }
     // Consume the snapshot so a second New Sandbox cannot restore the
@@ -271,6 +276,16 @@ fn bake_ready(sandbox_dir: &Path, runtime: &Path) {
     if let Err(e) = std::fs::rename(&tmp, &dest) {
         eprintln!("ready snapshot: install: {e}");
         let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    if let Some(parent) = dest.parent() {
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                if entry.path() != dest {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
+        }
     }
 }
 
@@ -579,5 +594,44 @@ mod tests {
         assert_eq!(hv.start(id, &b, limits()).unwrap(), StartKind::Cold);
         assert!(fake.restores.lock().unwrap().is_empty());
         assert_eq!(*fake.boots.lock().unwrap(), vec![id]);
+    }
+
+    #[test]
+    fn bake_drops_snapshots_for_other_runtimes() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(dir.path());
+        let stale = dir.path().join(".ready").join("deadbeefdeadbeef");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join(SAVE_NAME), b"old").unwrap();
+        let fake = Fake::new();
+        let hv = Hypervisor::wrap(rt.clone(), fake);
+        let sb = dir.path().join("sb");
+        crate::environment::write_default(&sb).unwrap();
+        std::fs::create_dir_all(sb.join("disk")).unwrap();
+        std::fs::write(sb.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
+        std::fs::write(sb.join("machine.ident"), b"ident").unwrap();
+        std::fs::write(sb.join(SAVE_NAME), b"save").unwrap();
+        hv.save_and_stop(Uuid::from_u128(12), &sb.join(SAVE_NAME))
+            .unwrap();
+        assert!(!stale.exists());
+        assert!(hv.ready_snapshot_exists(dir.path()));
+    }
+
+    #[test]
+    fn ready_snapshot_exists_after_bake() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(dir.path());
+        let fake = Fake::new();
+        let hv = Hypervisor::wrap(rt.clone(), fake);
+        let sb = dir.path().join("sb");
+        crate::environment::write_default(&sb).unwrap();
+        std::fs::create_dir_all(sb.join("disk")).unwrap();
+        std::fs::write(sb.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
+        std::fs::write(sb.join("machine.ident"), b"ident").unwrap();
+        std::fs::write(sb.join(SAVE_NAME), b"save").unwrap();
+        assert!(!hv.ready_snapshot_exists(dir.path()));
+        hv.save_and_stop(Uuid::from_u128(11), &sb.join(SAVE_NAME))
+            .unwrap();
+        assert!(hv.ready_snapshot_exists(dir.path()));
     }
 }

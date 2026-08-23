@@ -16,6 +16,7 @@ use crate::cache::Cache;
 use crate::catalog::Catalog;
 use crate::layout::{Layout, LayoutStore};
 use crate::publish::Publisher;
+use crate::resume::Resume;
 use crate::sandbox::{ActionError, Limits, State as SandboxState, Store};
 use crate::templates::Library;
 use crate::vmm::{Hypervisor, SAVE_NAME, StartKind};
@@ -31,6 +32,7 @@ pub struct AppState {
     pub publish: Publisher,
     pub sessions: crate::pty::Sessions,
     pub vmm: Option<Arc<Hypervisor>>,
+    pub resume: Arc<Resume>,
 }
 
 #[derive(Deserialize, Default)]
@@ -176,7 +178,8 @@ async fn start(
     if let Some(vmm) = state.vmm.clone() {
         let store = state.store.clone();
         let cache = state.cache.clone();
-        let result = tokio::task::spawn_blocking(move || boot(store, cache, vmm, id))
+        let resume = state.resume.clone();
+        let result = tokio::task::spawn_blocking(move || boot(store, cache, vmm, resume, id))
             .await
             .map_err(|_| ActionError::Internal)
             .and_then(|r| r);
@@ -191,9 +194,10 @@ async fn stop(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     if let Some(vmm) = state.vmm.clone() {
         let store = state.store.clone();
+        let resume = state.resume.clone();
         state.publish.drop_sandbox(id);
         state.sessions.drop_sandbox(id);
-        let result = tokio::task::spawn_blocking(move || halt(store, vmm, id))
+        let result = tokio::task::spawn_blocking(move || halt(store, vmm, resume, id, true))
             .await
             .map_err(|_| ActionError::Internal)
             .and_then(|r| r);
@@ -217,10 +221,12 @@ async fn destroy(
     state.sessions.drop_sandbox(id);
     if let Some(vmm) = state.vmm.clone() {
         let store = state.store.clone();
+        let resume = state.resume.clone();
         let result = tokio::task::spawn_blocking(move || {
             if store.get(id).map(|s| s.state).ok() == Some(SandboxState::Running) {
-                let _ = halt(store.clone(), vmm, id);
+                let _ = halt(store.clone(), vmm, resume.clone(), id, true);
             }
+            resume.unmark(id);
             store.destroy(id)
         })
         .await
@@ -410,6 +416,7 @@ fn boot(
     store: Arc<Store>,
     cache: Arc<Cache>,
     vmm: Arc<Hypervisor>,
+    resume: Arc<Resume>,
     id: Uuid,
 ) -> Result<crate::sandbox::Sandbox, ActionError> {
     store.begin_boot(id)?;
@@ -417,7 +424,11 @@ fn boot(
         boot_claimed(&store, &cache, &vmm, id)
     }));
     match outcome {
-        Ok(Ok(sandbox)) => Ok(sandbox),
+        Ok(Ok(sandbox)) => {
+            resume.mark(id);
+            kick_replenish(vmm, store.root().to_path_buf());
+            Ok(sandbox)
+        }
         Ok(Err(err)) => {
             let _ = vmm.stop(id);
             store.abort_boot(id);
@@ -506,7 +517,9 @@ fn apply_env_at(
 fn halt(
     store: Arc<Store>,
     vmm: Arc<Hypervisor>,
+    resume: Arc<Resume>,
     id: Uuid,
+    forget: bool,
 ) -> Result<crate::sandbox::Sandbox, ActionError> {
     let sandbox = store.get(id)?;
     if sandbox.state != SandboxState::Running {
@@ -521,7 +534,119 @@ fn halt(
         let _ = std::fs::remove_file(&save);
         vmm.stop(id).map_err(ActionError::Failed)?;
     }
+    if forget {
+        resume.unmark(id);
+    }
     store.stop(id)
+}
+
+static WARMING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn kick_replenish(vmm: Arc<Hypervisor>, sandboxes: PathBuf) {
+    std::thread::spawn(move || replenish_ready(&vmm, &sandboxes));
+}
+
+fn replenish_ready(vmm: &Hypervisor, sandboxes: &std::path::Path) {
+    if vmm.ready_snapshot_exists(sandboxes) {
+        return;
+    }
+    if WARMING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            WARMING.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let _done = Done;
+    eprintln!("ready snapshot: warming");
+    let dir = sandboxes.join(".warm");
+    let _ = std::fs::remove_dir_all(&dir);
+    let id = Uuid::new_v4();
+    let run = (|| {
+        std::fs::create_dir_all(&dir).map_err(|e| format!("warm mkdir: {e}"))?;
+        crate::environment::write_default(&dir).map_err(|e| e.to_string())?;
+        vmm.start_cold(id, &dir, Limits::default())?;
+        crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(90))?;
+        vmm.save_and_stop(id, &dir.join(SAVE_NAME))?;
+        Ok::<(), String>(())
+    })();
+    if let Err(e) = run {
+        eprintln!("ready snapshot: warm failed ({e})");
+        let _ = vmm.stop(id);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+pub fn resume_and_warm(state: AppState) {
+    tokio::spawn(async move {
+        let Some(vmm) = state.vmm.clone() else {
+            return;
+        };
+        for id in state.resume.ids() {
+            if state.store.get(id).is_err() {
+                state.resume.unmark(id);
+                continue;
+            }
+            let store = state.store.clone();
+            let cache = state.cache.clone();
+            let vmm = vmm.clone();
+            let resume = state.resume.clone();
+            match tokio::task::spawn_blocking(move || boot(store, cache, vmm, resume, id)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => eprintln!("sandbox {id}: resume failed ({e})"),
+                Err(e) => eprintln!("sandbox {id}: resume join ({e})"),
+            }
+        }
+        let vmm = vmm.clone();
+        let root = state.store.root().to_path_buf();
+        let _ = tokio::task::spawn_blocking(move || replenish_ready(&vmm, &root)).await;
+    });
+}
+
+pub async fn on_quit(state: AppState) {
+    let ctrl_c = tokio::signal::ctrl_c();
+    #[cfg(unix)]
+    {
+        let mut term =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(_) => {
+                    let _ = ctrl_c.await;
+                    return save_running(state).await;
+                }
+            };
+        tokio::select! {
+            _ = ctrl_c => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = ctrl_c.await;
+    }
+    save_running(state).await;
+}
+
+async fn save_running(state: AppState) {
+    let Some(vmm) = state.vmm.clone() else {
+        return;
+    };
+    eprintln!("writing machine state");
+    for id in state.resume.ids() {
+        if state.store.get(id).map(|s| s.state).ok() != Some(SandboxState::Running) {
+            continue;
+        }
+        let store = state.store.clone();
+        let vmm = vmm.clone();
+        let resume = state.resume.clone();
+        match tokio::task::spawn_blocking(move || halt(store, vmm, resume, id, false)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => eprintln!("sandbox {id}: quit save ({e})"),
+            Err(e) => eprintln!("sandbox {id}: quit save join ({e})"),
+        }
+    }
 }
 
 fn action(
@@ -580,6 +705,7 @@ mod tests {
                 shipped: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../templates"),
                 user: dir.path().join("templates"),
             }),
+            resume: Arc::new(crate::resume::Resume::open(dir.path().join("running.json"))),
             catalog: Arc::new(crate::catalog::Catalog::memory(vec![
                 crate::catalog::Package {
                     name: "jq".into(),
