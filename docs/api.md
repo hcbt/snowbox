@@ -16,7 +16,7 @@ The token is a file in the Host config directory (`snowbox/token` under `dirs::c
 
 ## Sandboxes
 
-Each Sandbox has a disk the Daemon owns on the Host (under the data directory, `snowbox/sandboxes/{id}`). That disk holds Workspace (`/workspace`), Home (allowlist), a system tree, and the Environment flake (a Host document, never `/workspace`). Start boots a Nix-built Linux guest via Virtualization.framework (macOS). The guest root is a copy of the runtime disk; Workspace and Home are synced over vsock, not a Host mount. Quit the Daemon: running guests stop; disks stay. Destroy is the only verb that deletes the Workspace.
+Each Sandbox has a disk the Daemon owns on the Host (under the data directory, `snowbox/sandboxes/{id}`). That disk holds Workspace (`/workspace`), Home (allowlist), a system tree, and the Environment flake (a Host document, never `/workspace`). Start restores a saved machine state when one exists for that disk, otherwise it boots a Nix-built Linux guest via Virtualization.framework (macOS). Stop writes that state next to the disk. The guest root is a clone of the runtime disk; Workspace and Home are synced over vsock, not a Host mount. Quit the Daemon: running guests stop; disks and machine state stay. Destroy is the only verb that deletes the Workspace.
 
 Many Sandboxes may run at once. They share Host CPU, RAM, and disk capacity, not a filesystem and not a network: each guest has its own disk and its own NAT. The allowed exception is the Cache (Host-side; the Daemon writes, guests copy).
 
@@ -35,8 +35,8 @@ Reset restores the system (drops the writable guest disk so the next start is a 
 | `POST` | `/sandboxes` | Create. Body `{"name": "...", "limits": {...}}` — both optional. `201` |
 | `GET` | `/sandboxes/{id}` | One record. `404` if missing |
 | `PATCH` | `/sandboxes/{id}` | Update Limits. Body `{"limits":{"cpu":4,"ram":4294967296,"disk":34359738368}}` — any field optional. Applied on the next start. `404` if missing |
-| `POST` | `/sandboxes/{id}/start` | `stopped` → `running`. `409` if already running |
-| `POST` | `/sandboxes/{id}/stop` | `running` → `stopped`. Disk kept. `409` if already stopped |
+| `POST` | `/sandboxes/{id}/start` | `stopped` → `running`. Restores machine state when present, otherwise boots. `409` if already running |
+| `POST` | `/sandboxes/{id}/stop` | `running` → `stopped`. Writes machine state; disk kept. `409` if already stopped |
 | `POST` | `/sandboxes/{id}/reset` | Keep Workspace + Home allowlist; restore system. `404` if missing |
 | `POST` | `/sandboxes/{id}/copy-in` | Body `{"from":"/host/path","replace":false}` |
 | `POST` | `/sandboxes/{id}/copy-out` | Body `{"to":"/host/path","replace":false}` |

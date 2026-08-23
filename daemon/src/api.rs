@@ -315,26 +315,53 @@ fn boot_claimed(
     let t0 = std::time::Instant::now();
     let sandbox = store.get(id)?;
     let dir = store.dir(id);
-    vmm.start(id, &dir, sandbox.limits)
+    let kind = vmm
+        .start(id, &dir, sandbox.limits)
         .map_err(ActionError::Failed)?;
-    eprintln!("sandbox {id}: hypervisor {}ms", t0.elapsed().as_millis());
+    eprintln!(
+        "sandbox {id}: hypervisor {}ms ({kind:?})",
+        t0.elapsed().as_millis()
+    );
     let t1 = std::time::Instant::now();
-    crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(90))
-        .map_err(ActionError::Failed)?;
+    let ready_for = match kind {
+        crate::vz::StartKind::Restored => std::time::Duration::from_secs(8),
+        crate::vz::StartKind::Cold => std::time::Duration::from_secs(90),
+    };
+    if let Err(e) = crate::agent::wait_ready(vmm, id, ready_for) {
+        if kind == crate::vz::StartKind::Restored {
+            eprintln!("sandbox {id}: restored agent dead ({e}); booting");
+            let _ = vmm.stop(id);
+            let _ = std::fs::remove_file(dir.join(crate::vz::SAVE_NAME));
+            vmm.start_cold(id, &dir, sandbox.limits)
+                .map_err(ActionError::Failed)?;
+            crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(90))
+                .map_err(ActionError::Failed)?;
+        } else {
+            return Err(ActionError::Failed(e));
+        }
+    }
     eprintln!("sandbox {id}: agent {}ms", t1.elapsed().as_millis());
     crate::agent::tar_in(vmm, id, "/workspace", &dir.join("workspace"))
         .map_err(ActionError::Failed)?;
     let _ = crate::agent::tar_in(vmm, id, "/home/snow", &dir.join("home"));
     let t2 = std::time::Instant::now();
-    apply_env(store, cache, vmm, id)?;
+    apply_env_at(&dir, cache, vmm, id)?;
     eprintln!("sandbox {id}: environment {}ms", t2.elapsed().as_millis());
     eprintln!("sandbox {id}: start {}ms", t0.elapsed().as_millis());
     store.start(id)
 }
 
 fn apply_env(store: &Store, cache: &Cache, vmm: &Hypervisor, id: Uuid) -> Result<(), ActionError> {
-    let dir = store.dir(id);
-    let stamp = crate::environment::fingerprint(&dir)?;
+    apply_env_at(&store.dir(id), cache, vmm, id)
+}
+
+fn apply_env_at(
+    dir: &std::path::Path,
+    cache: &Cache,
+    vmm: &Hypervisor,
+    id: Uuid,
+) -> Result<(), ActionError> {
+    let stamp = crate::environment::fingerprint(dir)?;
     let mark = dir.join("environment.applied");
     if std::fs::read_to_string(&mark).ok().as_deref() == Some(stamp.as_str()) {
         return Ok(());
@@ -358,7 +385,12 @@ fn halt(
     let dir = store.dir(id);
     let _ = crate::agent::tar_out(&vmm, id, "/workspace", &dir.join("workspace"));
     let _ = crate::agent::tar_out(&vmm, id, "/home/snow", &dir.join("home"));
-    vmm.stop(id).map_err(ActionError::Failed)?;
+    let save = dir.join(crate::vz::SAVE_NAME);
+    if let Err(e) = vmm.save_and_stop(id, &save) {
+        eprintln!("sandbox {id}: save failed ({e}); power off");
+        let _ = std::fs::remove_file(&save);
+        vmm.stop(id).map_err(ActionError::Failed)?;
+    }
     store.stop(id)
 }
 

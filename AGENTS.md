@@ -5,7 +5,7 @@ Snowbox runs a coding Agent inside an isolated Nix-built Linux Sandbox on the Ho
 ## Language and decisions
 
 - **[CONTEXT.md](CONTEXT.md)** — glossary. Use those nouns (Host, Sandbox, Workspace, Home, Daemon, Cache, Package, Template, Environment, Canvas, Window, Layout). Read it before naming anything in code or docs.
-- **[docs/adr/](docs/adr/)** — irreversible trade-offs. Read the matching ADR before changing isolation, the Cache, the Environment, the Daemon API, the Host OS/hypervisor, the Daemon language (Rust, [0019](docs/adr/0019-daemon-is-rust.md)), the macOS VMM ([0022](docs/adr/0022-daemon-embeds-virtualization-framework.md)), or the GUI ([0020](docs/adr/0020-gui-is-a-canvas-of-windows.md), [0021](docs/adr/0021-ui-is-a-solid-spa.md)).
+- **[docs/adr/](docs/adr/)** — irreversible trade-offs. Read the matching ADR before changing isolation, the Cache, the Environment, the Daemon API, the Host OS/hypervisor, the Daemon language (Rust, [0019](docs/adr/0019-daemon-is-rust.md)), the macOS VMM ([0022](docs/adr/0022-daemon-embeds-virtualization-framework.md), [0023](docs/adr/0023-start-restores-machine-state.md)), or the GUI ([0020](docs/adr/0020-gui-is-a-canvas-of-windows.md), [0021](docs/adr/0021-ui-is-a-solid-spa.md)).
 
 ## How to work here
 

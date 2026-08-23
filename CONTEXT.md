@@ -51,8 +51,8 @@ The operation that makes the Environment true again. Declared Packages are reali
 _Avoid_: rebuild, reboot, reimage, factory reset
 
 **Stop**:
-Shut down a Sandbox and keep its disk: Workspace, Home, and Environment.
-_Avoid_: pause, freeze, suspend (until we mean those)
+Write the Sandbox’s machine state and keep its disk: Workspace, Home, Environment, and running processes. Start restores that state onto the same disk. A new Sandbox still boots. If restore is impossible, Start boots.
+_Avoid_: pause, freeze, suspend (as GUI nouns)
 
 **Destroy**:
 Delete a Sandbox. Workspace is gone unless copy-out already happened. The only verb that deletes the Workspace.

@@ -85,7 +85,7 @@ async fn run_daemon() -> Result<()> {
             "runtime {}",
             rt.kernel.parent().unwrap_or(rt.kernel.as_path()).display()
         );
-        Arc::new(vz::Hypervisor::new(rt))
+        Arc::new(vz::Hypervisor::new(rt, data.clone()))
     });
     if vmm.is_none() {
         eprintln!("runtime missing (build guest, or set SNOWBOX_RUNTIME)");
