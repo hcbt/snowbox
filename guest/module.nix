@@ -147,6 +147,14 @@
           nix-store --import >/dev/null
           printf 'OK\n'
           ;;
+        PROFILE)
+          mkdir -p /nix/var/nix/profiles /etc/profile.d /home/snow
+          ln -sfn "$arg" /nix/var/nix/profiles/snowbox-environment
+          ln -sfn "$arg" /home/snow/.nix-profile
+          printf "export PATH=/nix/var/nix/profiles/snowbox-environment/bin:\$PATH\n" >/etc/profile.d/snowbox-environment.sh
+          chown -h snow:users /home/snow/.nix-profile 2>/dev/null || true
+          printf 'OK\n'
+          ;;
         *)
           printf 'ERR unknown\n' >&2
           exit 1

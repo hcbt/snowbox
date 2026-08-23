@@ -8,15 +8,12 @@
     let
       system = "aarch64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+      names = builtins.fromJSON (builtins.readFile ./packages.json);
     in
     {
       packages.${system}.default = pkgs.buildEnv {
         name = "environment";
-        paths = with pkgs; [
-          bash
-          coreutils
-          hello
-        ];
+        paths = map (n: pkgs.${n}) names;
       };
     };
 }

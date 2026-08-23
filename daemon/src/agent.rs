@@ -89,3 +89,45 @@ pub fn tar_out(vmm: &Hypervisor, id: Uuid, src: &str, to: &Path) -> Result<(), S
     archive.unpack(to).map_err(|e| format!("untar: {e}"))?;
     Ok(())
 }
+
+pub fn nar_in(vmm: &Hypervisor, id: Uuid, export: &[u8]) -> Result<(), String> {
+    let mut stream = vmm.vsock(id, vz::AGENT_PORT)?;
+    stream
+        .write_all(b"NAR_IN\n")
+        .map_err(|e| format!("nar_in header: {e}"))?;
+    stream
+        .write_all(export)
+        .map_err(|e| format!("nar_in body: {e}"))?;
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .map_err(|e| format!("nar_in shutdown: {e}"))?;
+    let mut reply = String::new();
+    stream
+        .read_to_string(&mut reply)
+        .map_err(|e| format!("nar_in reply: {e}"))?;
+    if reply.contains("OK") {
+        Ok(())
+    } else {
+        Err(format!("nar_in: {reply}"))
+    }
+}
+
+pub fn profile(vmm: &Hypervisor, id: Uuid, store_path: &str) -> Result<(), String> {
+    let mut stream = vmm.vsock(id, vz::AGENT_PORT)?;
+    let header = format!("PROFILE {store_path}\n");
+    stream
+        .write_all(header.as_bytes())
+        .map_err(|e| format!("profile write: {e}"))?;
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .map_err(|e| format!("profile shutdown: {e}"))?;
+    let mut reply = String::new();
+    stream
+        .read_to_string(&mut reply)
+        .map_err(|e| format!("profile reply: {e}"))?;
+    if reply.contains("OK") {
+        Ok(())
+    } else {
+        Err(format!("profile: {reply}"))
+    }
+}

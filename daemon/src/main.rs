@@ -13,6 +13,8 @@ mod api;
 mod auth;
 mod cache;
 mod environment;
+mod nar;
+mod nix;
 mod runtime;
 mod sandbox;
 mod sign;
@@ -83,6 +85,7 @@ async fn run_daemon() -> Result<()> {
     let state = api::AppState {
         token,
         store: Arc::new(store),
+        cache: Arc::new(cache),
         vmm,
     };
     let app = api::router(state).fallback(canvas);

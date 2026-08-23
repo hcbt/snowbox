@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::auth::require_token;
+use crate::cache::Cache;
 use crate::sandbox::{ActionError, State as SandboxState, Store};
 use crate::vz::Hypervisor;
 
@@ -19,6 +20,7 @@ use crate::vz::Hypervisor;
 pub struct AppState {
     pub token: String,
     pub store: Arc<Store>,
+    pub cache: Arc<Cache>,
     pub vmm: Option<Arc<Hypervisor>>,
 }
 
@@ -41,6 +43,11 @@ pub struct CopyOutBody {
     pub replace: bool,
 }
 
+#[derive(Deserialize)]
+pub struct AddPackageBody {
+    pub add: String,
+}
+
 pub fn router(state: AppState) -> Router {
     let v1 = Router::new()
         .route("/health", get(health))
@@ -51,6 +58,10 @@ pub fn router(state: AppState) -> Router {
         .route("/sandboxes/{id}/reset", post(reset))
         .route("/sandboxes/{id}/copy-in", post(copy_in))
         .route("/sandboxes/{id}/copy-out", post(copy_out))
+        .route(
+            "/sandboxes/{id}/packages",
+            get(list_packages).post(add_package),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), require_token));
 
     Router::new().nest("/api/v1", v1).with_state(state)
@@ -90,7 +101,8 @@ async fn start(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     if let Some(vmm) = state.vmm.clone() {
         let store = state.store.clone();
-        let result = tokio::task::spawn_blocking(move || boot(store, vmm, id))
+        let cache = state.cache.clone();
+        let result = tokio::task::spawn_blocking(move || boot(store, cache, vmm, id))
             .await
             .map_err(|_| ActionError::Internal)
             .and_then(|r| r);
@@ -159,8 +171,40 @@ async fn copy_out(
     action(state.store.copy_out(id, &body.to, body.replace))
 }
 
+async fn list_packages(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _ = state.store.get(id).map_err(map_err)?;
+    let pkgs = crate::environment::packages(&state.store.dir(id)).map_err(map_err)?;
+    Ok(Json(serde_json::json!({ "packages": pkgs })))
+}
+
+async fn add_package(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AddPackageBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let sandbox = state.store.get(id).map_err(map_err)?;
+    let pkgs =
+        crate::environment::add_package(&state.store.dir(id), body.add.trim()).map_err(map_err)?;
+    if sandbox.state == SandboxState::Running {
+        if let Some(vmm) = state.vmm.clone() {
+            let store = state.store.clone();
+            let cache = state.cache.clone();
+            tokio::task::spawn_blocking(move || apply_env(&store, &cache, &vmm, id))
+                .await
+                .map_err(|_| ActionError::Internal)
+                .and_then(|r| r)
+                .map_err(map_err)?;
+        }
+    }
+    Ok(Json(serde_json::json!({ "packages": pkgs })))
+}
+
 fn boot(
     store: Arc<Store>,
+    cache: Arc<Cache>,
     vmm: Arc<Hypervisor>,
     id: Uuid,
 ) -> Result<crate::sandbox::Sandbox, ActionError> {
@@ -179,7 +223,19 @@ fn boot(
         return Err(ActionError::Failed(e));
     }
     let _ = crate::agent::tar_in(&vmm, id, "/home/snow", &dir.join("home"));
+    if let Err(e) = apply_env(&store, &cache, &vmm, id) {
+        let _ = vmm.stop(id);
+        return Err(e);
+    }
     store.start(id)
+}
+
+fn apply_env(store: &Store, cache: &Cache, vmm: &Hypervisor, id: Uuid) -> Result<(), ActionError> {
+    let dir = store.dir(id).join("environment");
+    let realized = crate::nix::realize_environment(&dir, cache)?;
+    crate::agent::nar_in(vmm, id, &realized.export).map_err(ActionError::Failed)?;
+    crate::agent::profile(vmm, id, &realized.out_path).map_err(ActionError::Failed)?;
+    Ok(())
 }
 
 fn halt(
@@ -246,6 +302,7 @@ mod tests {
         let state = AppState {
             token: "test-token".into(),
             store: Arc::new(Store::open(dir.path()).unwrap()),
+            cache: Arc::new(Cache::open(dir.path().join("cache")).unwrap()),
             vmm: None,
         };
         (dir, state)
@@ -388,6 +445,53 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(json["error"], "not_found");
+    }
+
+    #[tokio::test]
+    async fn packages_on_host_environment() {
+        let (_dir, state) = harness();
+        let make = || router(state.clone());
+        let (status, created) = send(
+            make(),
+            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = created["id"].as_str().unwrap();
+        let url = format!("http://127.0.0.1/api/v1/sandboxes/{id}/packages");
+        let (status, listed) = send(
+            make(),
+            authed(Request::get(&url)).body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            listed["packages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p == "hello")
+        );
+
+        let (status, added) = send(
+            make(),
+            authed(Request::post(&url))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"add":"jq"}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            added["packages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p == "jq")
+        );
     }
 
     #[tokio::test]

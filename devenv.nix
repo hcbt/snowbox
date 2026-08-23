@@ -17,7 +17,12 @@
     pkgs.gnused
     pkgs.findutils
     pkgs.curl
+    pkgs.pkg-config
+    pkgs.nix.dev
+    pkgs.llvmPackages.libclang
   ];
+
+  env.LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
   processes.snowbox.exec = "cargo run -p snowbox";
 

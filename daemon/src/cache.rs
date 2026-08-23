@@ -25,6 +25,12 @@ impl Cache {
     pub fn substituter_uri(&self) -> String {
         format!("file://{}", self.root.display())
     }
+
+    pub fn put_nar(&self, store_path: &str, nar: &[u8]) -> std::io::Result<()> {
+        let name = store_path.rsplit('/').next().unwrap_or("path");
+        std::fs::write(self.root.join("nar").join(format!("{name}.nar")), nar)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
