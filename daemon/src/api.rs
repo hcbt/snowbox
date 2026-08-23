@@ -194,9 +194,11 @@ async fn destroy(
         .map_err(|_| ActionError::Internal)
         .and_then(|r| r);
         result.map_err(map_err)?;
+        let _ = state.layout.close_sandbox_windows(id);
         return Ok(StatusCode::NO_CONTENT);
     }
     state.store.destroy(id).map_err(map_err)?;
+    let _ = state.layout.close_sandbox_windows(id);
     Ok(StatusCode::NO_CONTENT)
 }
 

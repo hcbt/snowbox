@@ -32,9 +32,18 @@ export function App() {
   const refresh = async () => {
     const [s, l] = await Promise.all([api.sandboxes(), api.layout()]);
     setSandboxes(s.sandboxes);
-    setLayout(l);
+    const ids = new Set(s.sandboxes.map((b) => b.id));
+    const windows = l.windows.filter((w) => ids.has(w.sandbox));
+    const next = { ...l, windows };
+    setLayout(next);
     setReady(true);
+    if (windows.length !== l.windows.length) {
+      await api.saveLayout(next);
+    }
   };
+
+  const live = (sandboxId: string) =>
+    sandboxes().some((s) => s.id === sandboxId && s.state === "running");
 
   onSettled(() => {
     refresh().catch((e) => setStatus(String(e)));
@@ -86,6 +95,7 @@ export function App() {
     try {
       await fn();
       await refresh();
+      setStatus("");
     } catch (e) {
       setStatus(String(e));
     } finally {
@@ -101,6 +111,15 @@ export function App() {
       return;
     }
     run(async () => {
+      await api.openWindow(sb.id);
+    });
+  };
+
+  const hatch = () => {
+    run(async () => {
+      setStatus("starting…");
+      const sb = await api.create();
+      await api.start(sb.id);
       await api.openWindow(sb.id);
     });
   };
@@ -167,7 +186,9 @@ export function App() {
         e.preventDefault();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
-      onMouseDown={() => setMenu(null)}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) setMenu(null);
+      }}
     >
       <Show when={layout().icon_manager.visible}>
         <div
@@ -186,7 +207,7 @@ export function App() {
             <span class="flex-1">Icon Manager</span>
           </div>
           <div class="border-x-2 border-b-2 border-twm">
-            <For each={layout().windows}>
+            <For each={layout().windows.filter((w) => live(w.sandbox))}>
               {(w) => (
                 <button
                   type="button"
@@ -207,7 +228,7 @@ export function App() {
 
       <For each={layout().windows}>
         {(w) => (
-          <Show when={!w.iconified}>
+          <Show when={!w.iconified && live(w.sandbox)}>
             <div
               class="absolute flex min-h-20 min-w-[180px] flex-col"
               style={{
@@ -261,7 +282,7 @@ export function App() {
           hasRunning={running().length > 0}
           iconMgr={layout().icon_manager.visible}
           onNewWindow={newWindow}
-          onNewSandbox={() => setOverlay({ kind: "sandbox" })}
+          onNewSandbox={hatch}
           onIconify={() => {
             const id = focus();
             if (id) patchWin(id, { iconified: true }, true);
@@ -328,10 +349,13 @@ export function App() {
       </Show>
 
       <div
-        class="pointer-events-none fixed bottom-2 left-2 font-mono text-xs text-black"
-        classList={{ "text-white": busy() }}
+        class="pointer-events-none fixed bottom-2 left-2 px-2 py-0.5 font-mono text-xs font-bold"
+        classList={{
+          "bg-twm text-white": busy() || status().length > 0,
+          "text-black": !busy() && status().length === 0,
+        }}
       >
-        {busy() ? "working…" : status()}
+        {busy() ? status() || "working…" : status()}
       </div>
     </div>
   );

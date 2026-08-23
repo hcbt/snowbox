@@ -39,12 +39,14 @@ export function Term(props: { windowId: string }) {
     term.onData((data) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(data);
     });
+    let dropped = false;
     ws.onclose = () => {
-      term.write("\r\n[window closed]\r\n");
+      if (!dropped) term.write("\r\n[window closed]\r\n");
     };
     const ro = new ResizeObserver(() => fit.fit());
     ro.observe(host);
     return () => {
+      dropped = true;
       ro.disconnect();
       ws.close();
       term.dispose();

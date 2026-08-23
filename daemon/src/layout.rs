@@ -142,6 +142,14 @@ impl LayoutStore {
         self.persist()
     }
 
+    pub fn close_sandbox_windows(&self, sandbox: Uuid) -> Result<(), ActionError> {
+        {
+            let mut inner = self.inner.lock().expect("layout");
+            inner.windows.retain(|w| w.sandbox != sandbox);
+        }
+        self.persist()
+    }
+
     fn persist(&self) -> Result<(), ActionError> {
         let inner = self.inner.lock().expect("layout");
         if let Some(parent) = self.path.parent() {
@@ -170,6 +178,20 @@ mod tests {
         let store = LayoutStore::open(&path).unwrap();
         let got = store.window(win.id).unwrap();
         assert_eq!(got, win);
+    }
+
+    #[test]
+    fn close_sandbox_windows_drops_only_that_sandbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LayoutStore::open(dir.path().join("layout.json")).unwrap();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        store.open_window(a, "a".into()).unwrap();
+        let keep = store.open_window(b, "b".into()).unwrap();
+        store.close_sandbox_windows(a).unwrap();
+        let layout = store.get();
+        assert_eq!(layout.windows.len(), 1);
+        assert_eq!(layout.windows[0].id, keep.id);
     }
 
     #[test]
