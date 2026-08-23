@@ -312,24 +312,37 @@ fn boot_claimed(
     vmm: &Hypervisor,
     id: Uuid,
 ) -> Result<crate::sandbox::Sandbox, ActionError> {
+    let t0 = std::time::Instant::now();
     let sandbox = store.get(id)?;
     let dir = store.dir(id);
     vmm.start(id, &dir, sandbox.limits)
         .map_err(ActionError::Failed)?;
+    eprintln!("sandbox {id}: hypervisor {}ms", t0.elapsed().as_millis());
+    let t1 = std::time::Instant::now();
     crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(90))
         .map_err(ActionError::Failed)?;
+    eprintln!("sandbox {id}: agent {}ms", t1.elapsed().as_millis());
     crate::agent::tar_in(vmm, id, "/workspace", &dir.join("workspace"))
         .map_err(ActionError::Failed)?;
     let _ = crate::agent::tar_in(vmm, id, "/home/snow", &dir.join("home"));
+    let t2 = std::time::Instant::now();
     apply_env(store, cache, vmm, id)?;
+    eprintln!("sandbox {id}: environment {}ms", t2.elapsed().as_millis());
+    eprintln!("sandbox {id}: start {}ms", t0.elapsed().as_millis());
     store.start(id)
 }
 
 fn apply_env(store: &Store, cache: &Cache, vmm: &Hypervisor, id: Uuid) -> Result<(), ActionError> {
-    let dir = store.dir(id).join("environment");
-    let realized = crate::nix::realize_environment(&dir, cache)?;
+    let dir = store.dir(id);
+    let stamp = crate::environment::fingerprint(&dir)?;
+    let mark = dir.join("environment.applied");
+    if std::fs::read_to_string(&mark).ok().as_deref() == Some(stamp.as_str()) {
+        return Ok(());
+    }
+    let realized = crate::nix::realize_environment(&dir.join("environment"), cache)?;
     crate::agent::nar_in(vmm, id, &realized.export).map_err(ActionError::Failed)?;
     crate::agent::profile(vmm, id, &realized.out_path).map_err(ActionError::Failed)?;
+    std::fs::write(&mark, stamp).map_err(|_| ActionError::Internal)?;
     Ok(())
 }
 

@@ -18,6 +18,14 @@ pub fn write_default(dir: &Path) -> Result<(), ActionError> {
     Ok(())
 }
 
+pub fn fingerprint(dir: &Path) -> Result<String, ActionError> {
+    let pkgs = std::fs::read_to_string(dir.join("environment/packages.json"))
+        .map_err(|_| ActionError::Internal)?;
+    let lock = std::fs::read_to_string(dir.join("environment/flake.lock"))
+        .map_err(|_| ActionError::Internal)?;
+    Ok(format!("{pkgs}\n{lock}"))
+}
+
 pub fn packages(dir: &Path) -> Result<Vec<String>, ActionError> {
     let raw = std::fs::read_to_string(dir.join("environment/packages.json"))
         .map_err(|_| ActionError::Internal)?;
@@ -62,6 +70,11 @@ mod tests {
         assert!(dir.path().join("environment/flake.lock").is_file());
         let pkgs = packages(dir.path()).unwrap();
         assert!(pkgs.contains(&"hello".to_string()));
+        let a = fingerprint(dir.path()).unwrap();
+        let b = fingerprint(dir.path()).unwrap();
+        assert_eq!(a, b);
+        add_package(dir.path(), "jq").unwrap();
+        assert_ne!(a, fingerprint(dir.path()).unwrap());
     }
 
     #[test]

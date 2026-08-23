@@ -73,7 +73,15 @@ pub fn prepare_root_disk(
     std::fs::create_dir_all(&disk_dir).map_err(|e| format!("mkdir disk: {e}"))?;
     let root = disk_dir.join("root.raw");
     if !root.exists() {
-        std::fs::copy(runtime_rootfs, &root).map_err(|e| format!("copy rootfs: {e}"))?;
+        // Runtime lives on the Nix volume; Sandbox disks live on the data
+        // volume. clonefile cannot cross volumes, so copy onto this volume
+        // once and clone from there.
+        let template = sandbox_dir
+            .parent()
+            .unwrap_or(sandbox_dir)
+            .join(".runtime-root.raw");
+        ensure_runtime_template(runtime_rootfs, &template)?;
+        clone_or_copy(&template, &root)?;
         let mut perms = std::fs::metadata(&root)
             .map_err(|e| format!("stat rootfs: {e}"))?
             .permissions();
@@ -97,6 +105,51 @@ pub fn prepare_root_disk(
         file.set_len(disk).map_err(|e| format!("grow disk: {e}"))?;
     }
     Ok(root)
+}
+
+fn ensure_runtime_template(src: &Path, template: &Path) -> Result<(), String> {
+    let key = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
+    let key_path = template.with_extension("src");
+    let same = template.is_file()
+        && std::fs::read_to_string(&key_path).ok().as_deref()
+            == Some(key.to_string_lossy().as_ref());
+    if same {
+        return Ok(());
+    }
+    if let Some(parent) = template.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir template: {e}"))?;
+    }
+    let tmp = template.with_extension("tmp");
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::copy(src, &tmp).map_err(|e| format!("copy rootfs template: {e}"))?;
+    std::fs::rename(&tmp, template).map_err(|e| format!("install rootfs template: {e}"))?;
+    std::fs::write(&key_path, key.to_string_lossy().as_bytes())
+        .map_err(|e| format!("write rootfs template key: {e}"))?;
+    Ok(())
+}
+
+fn clone_or_copy(src: &Path, dst: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if clonefile(src, dst) {
+            return Ok(());
+        }
+    }
+    std::fs::copy(src, dst)
+        .map(|_| ())
+        .map_err(|e| format!("copy rootfs: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn clonefile(src: &Path, dst: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(src_c) = std::ffi::CString::new(src.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let Ok(dst_c) = std::ffi::CString::new(dst.as_os_str().as_bytes()) else {
+        return false;
+    };
+    unsafe { libc::clonefile(src_c.as_ptr(), dst_c.as_ptr(), 0) == 0 }
 }
 
 /// One NAT network per Sandbox. Shared-mode vmnet lets guests reach the
@@ -513,6 +566,18 @@ mod tests {
         std::fs::write(&src, vec![1u8; 64]).unwrap();
         super::prepare_root_disk(&sandbox, &src, 256).unwrap();
         assert_eq!(&std::fs::read(&root).unwrap()[..64], &[0u8; 64]);
+    }
+
+    #[test]
+    fn prepare_root_disk_clones_from_a_same_volume_template() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("runtime.raw");
+        std::fs::write(&src, b"rootfs").unwrap();
+        let a = super::prepare_root_disk(&dir.path().join("a"), &src, 64).unwrap();
+        let b = super::prepare_root_disk(&dir.path().join("b"), &src, 64).unwrap();
+        assert_eq!(std::fs::read(&a).unwrap()[..6], *b"rootfs");
+        assert_eq!(std::fs::read(&b).unwrap()[..6], *b"rootfs");
+        assert!(dir.path().join(".runtime-root.raw").is_file());
     }
 
     #[test]

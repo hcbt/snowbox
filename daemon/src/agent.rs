@@ -42,6 +42,13 @@ pub fn tar_in(vmm: &Hypervisor, id: Uuid, dest: &str, from: &Path) -> Result<(),
     if !from.exists() {
         return Ok(());
     }
+    if from.is_dir()
+        && std::fs::read_dir(from)
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(true)
+    {
+        return Ok(());
+    }
     let mut tar = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar);
