@@ -15,6 +15,7 @@ use crate::auth::require_token;
 use crate::cache::Cache;
 use crate::catalog::Catalog;
 use crate::layout::{Layout, LayoutStore};
+use crate::publish::Publisher;
 use crate::sandbox::{ActionError, Limits, State as SandboxState, Store};
 use crate::templates::Library;
 use crate::vz::Hypervisor;
@@ -27,6 +28,7 @@ pub struct AppState {
     pub layout: Arc<LayoutStore>,
     pub catalog: Arc<Catalog>,
     pub templates: Arc<Library>,
+    pub publish: Publisher,
     pub vmm: Option<Arc<Hypervisor>>,
 }
 
@@ -99,6 +101,14 @@ pub fn router(state: AppState) -> Router {
         .route("/sandboxes/{id}/copy-out", post(copy_out))
         .route("/packages", get(search_packages))
         .route("/templates", get(list_templates).post(save_template))
+        .route(
+            "/sandboxes/{id}/publish",
+            get(list_publish).post(publish_port),
+        )
+        .route(
+            "/sandboxes/{id}/publish/{port}",
+            axum::routing::delete(unpublish_port),
+        )
         .route(
             "/sandboxes/{id}/packages",
             get(list_packages).post(add_package),
@@ -180,6 +190,7 @@ async fn stop(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     if let Some(vmm) = state.vmm.clone() {
         let store = state.store.clone();
+        state.publish.drop_sandbox(id);
         let result = tokio::task::spawn_blocking(move || halt(store, vmm, id))
             .await
             .map_err(|_| ActionError::Internal)
@@ -212,9 +223,11 @@ async fn destroy(
         .map_err(|_| ActionError::Internal)
         .and_then(|r| r);
         result.map_err(map_err)?;
+        state.publish.drop_sandbox(id);
         let _ = state.layout.close_sandbox_windows(id);
         return Ok(StatusCode::NO_CONTENT);
     }
+    state.publish.drop_sandbox(id);
     state.store.destroy(id).map_err(map_err)?;
     let _ = state.layout.close_sandbox_windows(id);
     Ok(StatusCode::NO_CONTENT)
@@ -240,6 +253,54 @@ async fn copy_out(
 pub struct SaveTemplateBody {
     pub name: String,
     pub sandbox: Uuid,
+}
+
+#[derive(Deserialize)]
+pub struct PublishBody {
+    pub port: u16,
+    pub host_port: Option<u16>,
+}
+
+async fn list_publish(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let _ = state.store.get(id).map_err(map_err)?;
+    Ok(Json(serde_json::json!({
+        "published": state.publish.list(id)
+    })))
+}
+
+async fn publish_port(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PublishBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let sandbox = state.store.get(id).map_err(map_err)?;
+    if sandbox.state != SandboxState::Running {
+        return Err(map_err(ActionError::Conflict("sandbox is not running")));
+    }
+    let Some(vmm) = state.vmm.clone() else {
+        return Err(map_err(ActionError::Failed("no hypervisor".into())));
+    };
+    let mapping = state
+        .publish
+        .publish(vmm, id, body.port, body.host_port)
+        .await
+        .map_err(map_err)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::to_value(mapping).expect("mapping json")),
+    ))
+}
+
+async fn unpublish_port(
+    State(state): State<AppState>,
+    Path((id, port)): Path<(Uuid, u16)>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    let _ = state.store.get(id).map_err(map_err)?;
+    state.publish.unpublish(id, port).map_err(map_err)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_templates(
@@ -503,6 +564,7 @@ mod tests {
             store: Arc::new(Store::open(dir.path()).unwrap()),
             cache: Arc::new(Cache::open(dir.path().join("cache")).unwrap()),
             layout: Arc::new(LayoutStore::open(dir.path().join("layout.json")).unwrap()),
+            publish: crate::publish::Publisher::default(),
             templates: Arc::new(crate::templates::Library {
                 shipped: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../templates"),
                 user: dir.path().join("templates"),
@@ -835,6 +897,34 @@ mod tests {
         let list = pkgs["packages"].as_array().unwrap();
         assert!(list.iter().any(|p| p == "python3"));
         assert!(!list.iter().any(|p| p == "hello"));
+    }
+
+    #[tokio::test]
+    async fn publish_refused_while_stopped() {
+        let (_dir, state) = harness();
+        let make = || router(state.clone());
+        let (status, created) = send(
+            make(),
+            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = created["id"].as_str().unwrap();
+        let (status, err) = send(
+            make(),
+            authed(Request::post(format!(
+                "http://127.0.0.1/api/v1/sandboxes/{id}/publish"
+            )))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"port":3000}"#))
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(err["error"], "conflict");
     }
 
     #[tokio::test]

@@ -4,6 +4,7 @@ import {
   api,
   type Layout,
   type PackageHit,
+  type Published,
   type Sandbox,
   type Template,
   type WindowRec,
@@ -15,6 +16,7 @@ type Overlay =
   | { kind: "limits"; id: string }
   | { kind: "packages"; id: string }
   | { kind: "save-template"; id: string }
+  | { kind: "publish"; id: string }
   | { kind: "copy"; id: string; dir: "in" | "out" };
 
 type Menu = { x: number; y: number } | null;
@@ -344,6 +346,10 @@ export function App() {
             const sb = focusedSandbox();
             if (sb) setOverlay({ kind: "packages", id: sb.id });
           }}
+          onPublish={() => {
+            const sb = focusedSandbox();
+            if (sb) setOverlay({ kind: "publish", id: sb.id });
+          }}
           onCopy={(dir) => {
             const sb = focusedSandbox();
             if (sb) setOverlay({ kind: "copy", id: sb.id, dir });
@@ -396,6 +402,7 @@ function RootMenu(props: {
   onToggleIcons: () => void;
   onLimits: () => void;
   onPackages: () => void;
+  onPublish: () => void;
   onCopy: (dir: "in" | "out") => void;
   close: () => void;
 }) {
@@ -467,6 +474,9 @@ function RootMenu(props: {
       <button type="button" class={item} disabled={!props.sandbox} onClick={() => { props.onPackages(); props.close(); }}>
         Packages…
       </button>
+      <button type="button" class={item} disabled={!props.sandbox || props.sandbox.state !== "running"} onClick={() => { props.onPublish(); props.close(); }}>
+        Publish…
+      </button>
       <button type="button" class={item} disabled={!props.sandbox} onClick={() => { props.onCopy("in"); props.close(); }}>
         Copy in…
       </button>
@@ -502,11 +512,17 @@ function OverlayDialog(props: {
   const [hits, setHits] = createSignal<PackageHit[]>([]);
   const [installed, setInstalled] = createSignal<string[]>([]);
   const [path, setPath] = createSignal("");
+  const [pubPort, setPubPort] = createSignal("3000");
+  const [hostPort, setHostPort] = createSignal("");
+  const [published, setPublished] = createSignal<Published[]>([]);
   const [replace, setReplace] = createSignal(false);
 
   onSettled(() => {
     if (props.overlay.kind === "sandbox" || props.overlay.kind === "save-template") {
       api.templates().then((r) => setTemplates(r.templates)).catch(() => {});
+    }
+    if (props.overlay.kind === "publish" && props.sandbox) {
+      api.published(props.sandbox.id).then((r) => setPublished(r.published)).catch(() => {});
     }
     if (props.overlay.kind !== "packages" || !props.sandbox) return;
     api
@@ -537,6 +553,8 @@ function OverlayDialog(props: {
           ? "Packages"
           : props.overlay.kind === "save-template"
             ? "Save Template"
+          : props.overlay.kind === "publish"
+            ? "Publish"
           : props.overlay.kind === "copy" && props.overlay.dir === "in"
             ? "Copy in"
             : "Copy out";
@@ -552,6 +570,11 @@ function OverlayDialog(props: {
     } else if (ov.kind === "save-template") {
       if (!name().trim()) return;
       props.run(() => api.saveTemplate(name().trim(), ov.id));
+    } else if (ov.kind === "publish") {
+      const host = hostPort().trim();
+      props.run(() =>
+        api.publish(ov.id, Number(pubPort()), host ? Number(host) : undefined),
+      );
     } else if (ov.kind === "limits") {
       props.run(() =>
         api.patchLimits(ov.id, {
@@ -624,6 +647,26 @@ function OverlayDialog(props: {
           <label class={label}>
             name
             <input class={field} value={name()} onInput={(e) => setName(e.currentTarget.value)} />
+          </label>
+        </Show>
+        <Show when={props.overlay.kind === "publish"}>
+          <For each={published()}>
+            {(p) => (
+              <div class="flex items-center justify-between text-[12px]">
+                <a class="text-twm" href={p.url}>
+                  {p.url}
+                </a>
+                <span>:{p.port}</span>
+              </div>
+            )}
+          </For>
+          <label class={label}>
+            sandbox port
+            <input class={field} value={pubPort()} onInput={(e) => setPubPort(e.currentTarget.value)} />
+          </label>
+          <label class={label}>
+            host port (optional)
+            <input class={field} value={hostPort()} onInput={(e) => setHostPort(e.currentTarget.value)} />
           </label>
         </Show>
         <Show when={props.overlay.kind === "limits"}>

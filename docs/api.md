@@ -45,6 +45,9 @@ Reset restores the system (drops the writable guest disk so the next start is a 
 | `GET` | `/packages?q=&unfree=` | Search nixpkgs by program name or description. `unfree=true` includes unfree Packages (off by default). |
 | `GET` | `/sandboxes/{id}/packages` | Environment package names (nixpkgs attributes). |
 | `POST` | `/sandboxes/{id}/packages` | Body `{"add":"hello"}`. `add` is the catalog name from search. Updates the Host Environment. If the Sandbox is running, realises into the Cache and copies into the guest (no reboot). |
+| `GET` | `/sandboxes/{id}/publish` | Published ports for this Sandbox. Empty while none. |
+| `POST` | `/sandboxes/{id}/publish` | Body `{"port":3000,"host_port":null}`. Bind `127.0.0.1` only. Sandbox must be running. `201` `{port,host_port,url}`. |
+| `DELETE` | `/sandboxes/{id}/publish/{port}` | Drop a published port. `204` |
 | `DELETE` | `/sandboxes/{id}` | Destroy. Deletes the disk. Allowed in either state. `404` if missing |
 
 Create body:

@@ -8,6 +8,8 @@ export type Sandbox = {
   limits: Limits;
 };
 
+export type Published = { port: number; host_port: number; url: string };
+
 export type Template = { name: string; shipped: boolean };
 
 export type PackageHit = {
@@ -72,6 +74,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, sandbox }),
     }),
+  published: (id: string) =>
+    json<{ published: Published[] }>(`/api/v1/sandboxes/${id}/publish`),
+  publish: (id: string, port: number, host_port?: number) =>
+    json<Published>(`/api/v1/sandboxes/${id}/publish`, {
+      method: "POST",
+      body: JSON.stringify({ port, host_port: host_port ?? null }),
+    }),
+  unpublish: (id: string, port: number) =>
+    req(`/api/v1/sandboxes/${id}/publish/${port}`, { method: "DELETE" }),
   start: (id: string) =>
     json<Sandbox>(`/api/v1/sandboxes/${id}/start`, { method: "POST" }),
   stop: (id: string) =>

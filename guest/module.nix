@@ -179,6 +179,9 @@
           chown -h snow:users /home/snow/.nix-profile 2>/dev/null || true
           printf 'OK\n'
           ;;
+        CONNECT)
+          exec ${pkgs.socat}/bin/socat STDIO TCP:127.0.0.1:"$arg"
+          ;;
         *)
           printf 'ERR unknown\n' >&2
           exit 1
