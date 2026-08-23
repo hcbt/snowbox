@@ -20,7 +20,7 @@ Each Sandbox has a disk the Daemon owns on the Host (under the data directory, `
 
 The Cache is a Snowbox store under the data directory (`snowbox/cache`), a `file://` substituter the Daemon writes. Guests copy from it; they do not share `/nix/store` with the Host.
 
-JSON `state` is `stopped` or `running`. `home` is the allowlist of paths under the guest home that survive Reset. v1 default: `.gitconfig`.
+JSON `state` is `stopped` or `running`. `home` is the allowlist of paths under the guest home that survive Reset. v1 default: `.gitconfig`. `limits` are per-Sandbox CPU count, RAM bytes, and disk bytes. Defaults: 2 CPUs, 2 GiB RAM, 16 GiB disk. Set at create; PATCH later. CPU and RAM take effect at start. Disk is the guest root image size on the Host; growing applies at start, shrinking needs Reset first.
 
 Copy-in and copy-out run only while `stopped` (`409` `sandbox is running` otherwise). Non-empty destination without `"replace": true` → `409` `replace required`. No merge. A directory source is copied as the contents of `/workspace`; a file lands as `/workspace/{filename}`.
 
@@ -30,8 +30,9 @@ Reset restores the system (drops the writable guest disk so the next start is a 
 | --- | --- | --- |
 | `GET` | `/health` | `{"ok":true}` |
 | `GET` | `/sandboxes` | List |
-| `POST` | `/sandboxes` | Create. Body `{"name": "..."}` — `name` optional. `201` |
+| `POST` | `/sandboxes` | Create. Body `{"name": "...", "limits": {...}}` — both optional. `201` |
 | `GET` | `/sandboxes/{id}` | One record. `404` if missing |
+| `PATCH` | `/sandboxes/{id}` | Update Limits. Body `{"limits":{"cpu":4,"ram":4294967296,"disk":34359738368}}` — any field optional. Applied on the next start. `404` if missing |
 | `POST` | `/sandboxes/{id}/start` | `stopped` → `running`. `409` if already running |
 | `POST` | `/sandboxes/{id}/stop` | `running` → `stopped`. Disk kept. `409` if already stopped |
 | `POST` | `/sandboxes/{id}/reset` | Keep Workspace + Home allowlist; restore system. `404` if missing |
@@ -44,8 +45,13 @@ Reset restores the system (drops the writable guest disk so the next start is a 
 Create body:
 
 ```json
-{ "name": "work" }
+{
+  "name": "work",
+  "limits": { "cpu": 2, "ram": 2147483648, "disk": 17179869184 }
+}
 ```
+
+`name` and `limits` (and each limits field) are optional. Omitted limits fields get the defaults.
 
 Sandbox object:
 
@@ -54,9 +60,12 @@ Sandbox object:
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "name": "work",
   "state": "stopped",
-  "home": [".gitconfig"]
+  "home": [".gitconfig"],
+  "limits": { "cpu": 2, "ram": 2147483648, "disk": 17179869184 }
 }
 ```
+
+`cpu` is at least 1. `ram` is at least 512 MiB and a multiple of 1 MiB. `disk` is at least 1 GiB. Invalid limits → `400` `bad_request`.
 
 List is `{"sandboxes":[...]}`.
 

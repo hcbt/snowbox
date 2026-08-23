@@ -8,11 +8,55 @@ use uuid::Uuid;
 
 const DEFAULT_HOME: &[&str] = &[".gitconfig"];
 
+const MIB: u64 = 1024 * 1024;
+const GIB: u64 = 1024 * MIB;
+const DEFAULT_CPU: u32 = 2;
+const DEFAULT_RAM: u64 = 2 * GIB;
+const DEFAULT_DISK: u64 = 16 * GIB;
+const MIN_CPU: u32 = 1;
+const MIN_RAM: u64 = 512 * MIB;
+const MIN_DISK: u64 = GIB;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum State {
     Stopped,
     Running,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Limits {
+    pub cpu: u32,
+    pub ram: u64,
+    pub disk: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            cpu: DEFAULT_CPU,
+            ram: DEFAULT_RAM,
+            disk: DEFAULT_DISK,
+        }
+    }
+}
+
+impl Limits {
+    pub fn validate(self) -> Result<Self, ActionError> {
+        if self.cpu < MIN_CPU {
+            return Err(ActionError::BadRequest("cpu must be at least 1"));
+        }
+        if self.ram < MIN_RAM {
+            return Err(ActionError::BadRequest("ram must be at least 512 MiB"));
+        }
+        if !self.ram.is_multiple_of(MIB) {
+            return Err(ActionError::BadRequest("ram must be a multiple of 1 MiB"));
+        }
+        if self.disk < MIN_DISK {
+            return Err(ActionError::BadRequest("disk must be at least 1 GiB"));
+        }
+        Ok(self)
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -21,6 +65,7 @@ pub struct Sandbox {
     pub name: String,
     pub state: State,
     pub home: Vec<String>,
+    pub limits: Limits,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -28,6 +73,8 @@ struct Meta {
     id: Uuid,
     name: String,
     home: Vec<String>,
+    #[serde(default)]
+    limits: Limits,
 }
 
 struct Record {
@@ -104,7 +151,17 @@ impl Store {
         v
     }
 
+    #[cfg(test)]
     pub fn create(&self, name: Option<String>) -> Result<Sandbox, ActionError> {
+        self.create_with(name, Limits::default())
+    }
+
+    pub fn create_with(
+        &self,
+        name: Option<String>,
+        limits: Limits,
+    ) -> Result<Sandbox, ActionError> {
+        let limits = limits.validate()?;
         let id = Uuid::new_v4();
         let name = match name {
             Some(n) if !n.trim().is_empty() => n,
@@ -114,6 +171,7 @@ impl Store {
             id,
             name,
             home: DEFAULT_HOME.iter().map(|s| (*s).to_string()).collect(),
+            limits,
         };
         let dir = self.dir(id);
         fs::create_dir_all(dir.join("workspace")).map_err(|_| ActionError::Internal)?;
@@ -138,6 +196,15 @@ impl Store {
     pub fn get(&self, id: Uuid) -> Result<Sandbox, ActionError> {
         let map = self.inner.lock().expect("sandbox store");
         map.get(&id).map(view).ok_or(ActionError::NotFound)
+    }
+
+    pub fn set_limits(&self, id: Uuid, limits: Limits) -> Result<Sandbox, ActionError> {
+        let limits = limits.validate()?;
+        let mut map = self.inner.lock().expect("sandbox store");
+        let rec = map.get_mut(&id).ok_or(ActionError::NotFound)?;
+        rec.meta.limits = limits;
+        write_meta(&self.root.join(id.to_string()), &rec.meta)?;
+        Ok(view(rec))
     }
 
     pub fn start(&self, id: Uuid) -> Result<Sandbox, ActionError> {
@@ -245,6 +312,7 @@ fn view(rec: &Record) -> Sandbox {
         name: rec.meta.name.clone(),
         state: rec.state,
         home: rec.meta.home.clone(),
+        limits: rec.meta.limits,
     }
 }
 
@@ -383,6 +451,120 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
         (dir, store)
+    }
+
+    #[test]
+    fn create_applies_default_limits() {
+        let (_tmp, store) = store();
+        let sb = store.create(None).unwrap();
+        assert_eq!(sb.limits, Limits::default());
+        assert_eq!(sb.limits.cpu, 2);
+        assert_eq!(sb.limits.ram, 2 * GIB);
+        assert_eq!(sb.limits.disk, 16 * GIB);
+    }
+
+    #[test]
+    fn missing_limits_in_meta_are_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let sb = dir.path().join(id.to_string());
+        fs::create_dir_all(&sb).unwrap();
+        fs::write(
+            sb.join("meta.json"),
+            format!(r#"{{"id":"{id}","name":"old","home":[".gitconfig"]}}"#),
+        )
+        .unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(store.get(id).unwrap().limits, Limits::default());
+    }
+
+    #[test]
+    fn persist_custom_limits_across_open() {
+        let (dir, store) = store();
+        let limits = Limits {
+            cpu: 4,
+            ram: 4 * GIB,
+            disk: 32 * GIB,
+        };
+        let created = store.create_with(Some("work".into()), limits).unwrap();
+        assert_eq!(created.limits, limits);
+        drop(store);
+
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(store.get(created.id).unwrap().limits, limits);
+    }
+
+    #[test]
+    fn create_rejects_zero_cpu() {
+        let (_tmp, store) = store();
+        let err = store
+            .create_with(
+                None,
+                Limits {
+                    cpu: 0,
+                    ram: 2 * GIB,
+                    disk: 16 * GIB,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ActionError::BadRequest("cpu must be at least 1")
+        ));
+    }
+
+    #[test]
+    fn create_rejects_unaligned_ram() {
+        let (_tmp, store) = store();
+        let err = store
+            .create_with(
+                None,
+                Limits {
+                    cpu: 1,
+                    ram: 512 * MIB + 1,
+                    disk: 16 * GIB,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ActionError::BadRequest("ram must be a multiple of 1 MiB")
+        ));
+    }
+
+    #[test]
+    fn create_rejects_small_disk() {
+        let (_tmp, store) = store();
+        let err = store
+            .create_with(
+                None,
+                Limits {
+                    cpu: 1,
+                    ram: 512 * MIB,
+                    disk: GIB - 1,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ActionError::BadRequest("disk must be at least 1 GiB")
+        ));
+    }
+
+    #[test]
+    fn set_limits_persists() {
+        let (dir, store) = store();
+        let sb = store.create(None).unwrap();
+        let limits = Limits {
+            cpu: 1,
+            ram: 512 * MIB,
+            disk: 4 * GIB,
+        };
+        assert_eq!(store.set_limits(sb.id, limits).unwrap().limits, limits);
+        drop(store);
+
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(store.get(sb.id).unwrap().limits, limits);
     }
 
     #[test]

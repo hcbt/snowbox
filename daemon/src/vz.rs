@@ -1,9 +1,10 @@
 //! Virtualization.framework, in-process, macOS only.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::runtime::Runtime;
+use crate::sandbox::Limits;
 
 pub const AGENT_PORT: u32 = 52;
 const START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -39,8 +40,8 @@ impl Hypervisor {
         Self { runtime }
     }
 
-    pub fn start(&self, id: Uuid, sandbox_dir: &Path) -> Result<(), String> {
-        start_vm(&self.runtime, id, sandbox_dir)
+    pub fn start(&self, id: Uuid, sandbox_dir: &Path, limits: Limits) -> Result<(), String> {
+        start_vm(&self.runtime, id, sandbox_dir, limits)
     }
 
     pub fn stop(&self, id: Uuid) -> Result<(), String> {
@@ -52,8 +53,43 @@ impl Hypervisor {
     }
 }
 
+pub fn prepare_root_disk(
+    sandbox_dir: &Path,
+    runtime_rootfs: &Path,
+    disk: u64,
+) -> Result<PathBuf, String> {
+    let disk_dir = sandbox_dir.join("disk");
+    std::fs::create_dir_all(&disk_dir).map_err(|e| format!("mkdir disk: {e}"))?;
+    let root = disk_dir.join("root.raw");
+    if !root.exists() {
+        std::fs::copy(runtime_rootfs, &root).map_err(|e| format!("copy rootfs: {e}"))?;
+        let mut perms = std::fs::metadata(&root)
+            .map_err(|e| format!("stat rootfs: {e}"))?
+            .permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&root, perms).map_err(|e| format!("chmod rootfs: {e}"))?;
+    }
+    let len = std::fs::metadata(&root)
+        .map_err(|e| format!("stat disk: {e}"))?
+        .len();
+    if len > disk {
+        return Err(format!(
+            "disk image ({len} bytes) exceeds Limit ({disk} bytes)"
+        ));
+    }
+    if len < disk {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&root)
+            .map_err(|e| format!("open disk: {e}"))?;
+        file.set_len(disk).map_err(|e| format!("grow disk: {e}"))?;
+    }
+    Ok(root)
+}
+
 #[cfg(target_os = "macos")]
-fn start_vm(runtime: &Runtime, id: Uuid, sandbox_dir: &Path) -> Result<(), String> {
+fn start_vm(runtime: &Runtime, id: Uuid, sandbox_dir: &Path, limits: Limits) -> Result<(), String> {
     use std::os::fd::IntoRawFd;
     use std::sync::mpsc;
     use std::time::Instant;
@@ -68,18 +104,7 @@ fn start_vm(runtime: &Runtime, id: Uuid, sandbox_dir: &Path) -> Result<(), Strin
         return Err("virtualization is not supported on this Host".into());
     }
 
-    let disk_dir = sandbox_dir.join("disk");
-    std::fs::create_dir_all(&disk_dir).map_err(|e| format!("mkdir disk: {e}"))?;
-    let root = disk_dir.join("root.raw");
-    if !root.exists() {
-        std::fs::copy(&runtime.rootfs, &root).map_err(|e| format!("copy rootfs: {e}"))?;
-        let mut perms = std::fs::metadata(&root)
-            .map_err(|e| format!("stat rootfs: {e}"))?
-            .permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        perms.set_readonly(false);
-        std::fs::set_permissions(&root, perms).map_err(|e| format!("chmod rootfs: {e}"))?;
-    }
+    let root = prepare_root_disk(sandbox_dir, &runtime.rootfs, limits.disk)?;
 
     let kernel = path_str(&runtime.kernel)?;
     let initrd = path_str(&runtime.initrd)?;
@@ -97,8 +122,8 @@ fn start_vm(runtime: &Runtime, id: Uuid, sandbox_dir: &Path) -> Result<(), Strin
         let config = VZVirtualMachineConfiguration::new();
         config.setPlatform(&platform);
         config.setBootLoader(Some(&boot_loader));
-        config.setCPUCount(2);
-        config.setMemorySize(2 * 1024 * 1024 * 1024);
+        config.setCPUCount(usize::try_from(limits.cpu).expect("cpu fits usize"));
+        config.setMemorySize(limits.ram);
 
         let disk_attach = VZDiskImageStorageDeviceAttachment::initWithURL_readOnly_cachingMode_synchronizationMode_error(
             VZDiskImageStorageDeviceAttachment::alloc(),
@@ -200,7 +225,12 @@ fn start_vm(runtime: &Runtime, id: Uuid, sandbox_dir: &Path) -> Result<(), Strin
 }
 
 #[cfg(not(target_os = "macos"))]
-fn start_vm(_runtime: &Runtime, _id: Uuid, _sandbox_dir: &Path) -> Result<(), String> {
+fn start_vm(
+    _runtime: &Runtime,
+    _id: Uuid,
+    _sandbox_dir: &Path,
+    _limits: Limits,
+) -> Result<(), String> {
     Err("Virtualization.framework is macOS-only".into())
 }
 
@@ -357,5 +387,29 @@ mod tests {
     #[test]
     fn reports_support_without_creating_a_vm() {
         let _ = super::is_supported();
+    }
+
+    #[test]
+    fn prepare_root_disk_copies_and_grows() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("runtime.raw");
+        std::fs::write(&src, vec![0u8; 64]).unwrap();
+        let sandbox = dir.path().join("sb");
+        let root = super::prepare_root_disk(&sandbox, &src, 256).unwrap();
+        assert_eq!(std::fs::metadata(&root).unwrap().len(), 256);
+        assert_eq!(&std::fs::read(&root).unwrap()[..64], &[0u8; 64]);
+
+        std::fs::write(&src, vec![1u8; 64]).unwrap();
+        super::prepare_root_disk(&sandbox, &src, 256).unwrap();
+        assert_eq!(&std::fs::read(&root).unwrap()[..64], &[0u8; 64]);
+    }
+
+    #[test]
+    fn prepare_root_disk_refuses_when_image_exceeds_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("runtime.raw");
+        std::fs::write(&src, vec![0u8; 200]).unwrap();
+        let err = super::prepare_root_disk(&dir.path().join("sb"), &src, 100).unwrap_err();
+        assert!(err.contains("exceeds"));
     }
 }

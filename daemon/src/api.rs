@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::auth::require_token;
 use crate::cache::Cache;
-use crate::sandbox::{ActionError, State as SandboxState, Store};
+use crate::sandbox::{ActionError, Limits, State as SandboxState, Store};
 use crate::vz::Hypervisor;
 
 #[derive(Clone)]
@@ -27,6 +27,31 @@ pub struct AppState {
 #[derive(Deserialize, Default)]
 pub struct CreateBody {
     pub name: Option<String>,
+    #[serde(default)]
+    pub limits: LimitsPatch,
+}
+
+#[derive(Deserialize, Default)]
+pub struct PatchBody {
+    #[serde(default)]
+    pub limits: LimitsPatch,
+}
+
+#[derive(Clone, Deserialize, Default)]
+pub struct LimitsPatch {
+    pub cpu: Option<u32>,
+    pub ram: Option<u64>,
+    pub disk: Option<u64>,
+}
+
+impl LimitsPatch {
+    fn apply(self, base: Limits) -> Limits {
+        Limits {
+            cpu: self.cpu.unwrap_or(base.cpu),
+            ram: self.ram.unwrap_or(base.ram),
+            disk: self.disk.unwrap_or(base.disk),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -52,7 +77,7 @@ pub fn router(state: AppState) -> Router {
     let v1 = Router::new()
         .route("/health", get(health))
         .route("/sandboxes", get(list).post(create))
-        .route("/sandboxes/{id}", get(get_one).delete(destroy))
+        .route("/sandboxes/{id}", get(get_one).patch(patch).delete(destroy))
         .route("/sandboxes/{id}/start", post(start))
         .route("/sandboxes/{id}/stop", post(stop))
         .route("/sandboxes/{id}/reset", post(reset))
@@ -79,12 +104,26 @@ async fn create(
     State(state): State<AppState>,
     body: Option<Json<CreateBody>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let name = body.and_then(|Json(b)| b.name);
-    let sandbox = state.store.create(name).map_err(map_err)?;
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let limits = body.limits.apply(Limits::default());
+    let sandbox = state
+        .store
+        .create_with(body.name, limits)
+        .map_err(map_err)?;
     Ok((
         StatusCode::CREATED,
         Json(serde_json::to_value(sandbox).expect("sandbox json")),
     ))
+}
+
+async fn patch(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PatchBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let current = state.store.get(id).map_err(map_err)?;
+    let limits = body.limits.apply(current.limits);
+    action(state.store.set_limits(id, limits))
 }
 
 async fn get_one(
@@ -213,7 +252,8 @@ fn boot(
         return Err(ActionError::Conflict("already running"));
     }
     let dir = store.dir(id);
-    vmm.start(id, &dir).map_err(ActionError::Failed)?;
+    vmm.start(id, &dir, sandbox.limits)
+        .map_err(ActionError::Failed)?;
     if let Err(e) = crate::agent::wait_ready(&vmm, id, std::time::Duration::from_secs(90)) {
         let _ = vmm.stop(id);
         return Err(ActionError::Failed(e));
@@ -445,6 +485,81 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(json["error"], "not_found");
+    }
+
+    #[tokio::test]
+    async fn create_and_patch_limits() {
+        let (_dir, state) = harness();
+        let make = || router(state.clone());
+
+        let (status, created) = send(
+            make(),
+            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(created["limits"]["cpu"].as_u64(), Some(2));
+        assert_eq!(
+            created["limits"]["ram"].as_u64(),
+            Some(2 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(
+            created["limits"]["disk"].as_u64(),
+            Some(16 * 1024 * 1024 * 1024)
+        );
+
+        let (status, created) = send(
+            make(),
+            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"name":"fat","limits":{"cpu":4,"ram":4294967296}}"#,
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(created["name"], "fat");
+        assert_eq!(created["limits"]["cpu"].as_u64(), Some(4));
+        assert_eq!(
+            created["limits"]["ram"].as_u64(),
+            Some(4 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(
+            created["limits"]["disk"].as_u64(),
+            Some(16 * 1024 * 1024 * 1024)
+        );
+
+        let id = created["id"].as_str().unwrap();
+        let url = format!("http://127.0.0.1/api/v1/sandboxes/{id}");
+        let (status, patched) = send(
+            make(),
+            authed(Request::patch(&url))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"limits":{"disk":34359738368}}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(patched["limits"]["cpu"].as_u64(), Some(4));
+        assert_eq!(
+            patched["limits"]["disk"].as_u64(),
+            Some(32 * 1024 * 1024 * 1024)
+        );
+
+        let (status, bad) = send(
+            make(),
+            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"limits":{"cpu":0}}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(bad["error"], "bad_request");
     }
 
     #[tokio::test]
