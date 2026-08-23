@@ -2,7 +2,6 @@
 .direnv
 result
 result-*
-.snowbox-spike*
 *.img
 .pre-commit-config.yaml
 devenv.local.nix

@@ -10,9 +10,8 @@ Snowbox runs a coding Agent inside an isolated Nix-built Linux Sandbox on the Ho
 ## How to work here
 
 - Enter the env with `devenv shell -- <cmd>`. Do not use host Python/Node/toolchains.
-- The Daemon is Rust. Spike Host drivers stay **inline in Nix** (`writeShellApplication` in `nix/*.nix`). Do not add standalone `.sh` files.
-- Isolation / Cache spikes: `nix run .#spike-a -- prove` and `nix run .#spike-b -- prove`.
-- Layout: `nix/guest-spike-*.nix` are guest images; `nix/spike-*.nix` are Host drivers; `flake.nix` wires them; `devenv.nix` is the Host shell.
+- The Daemon is Rust. Host glue that is not the Daemon stays **inline in Nix**. Do not add standalone `.sh` files.
+- Layout: `flake.nix` is the flake; `devenv.nix` is the Host shell.
 
 ## Invariants
 

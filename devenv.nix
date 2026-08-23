@@ -12,7 +12,6 @@
     pkgs.findutils
     pkgs.curl
     pkgs.vfkit
-    pkgs.e2fsprogs
   ];
 
   git-hooks.package = pkgs.prek;
