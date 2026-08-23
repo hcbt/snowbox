@@ -41,9 +41,14 @@ async fn main() -> Result<()> {
     let token_path = token_path()?;
     let token = load_or_create_token(&token_path)?;
 
+    let data = dirs::data_dir()
+        .context("no data directory")?
+        .join("snowbox")
+        .join("sandboxes");
+    let store = sandbox::Store::open(&data).context("open sandbox store")?;
     let state = api::AppState {
         token,
-        store: Arc::new(sandbox::Store::new()),
+        store: Arc::new(store),
     };
     let app = api::router(state).fallback(canvas);
 

@@ -8,6 +8,7 @@ use axum::{
     routing::{get, post},
 };
 use serde::Deserialize;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::auth::require_token;
@@ -24,6 +25,20 @@ pub struct CreateBody {
     pub name: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct CopyInBody {
+    pub from: PathBuf,
+    #[serde(default)]
+    pub replace: bool,
+}
+
+#[derive(Deserialize)]
+pub struct CopyOutBody {
+    pub to: PathBuf,
+    #[serde(default)]
+    pub replace: bool,
+}
+
 pub fn router(state: AppState) -> Router {
     let v1 = Router::new()
         .route("/health", get(health))
@@ -32,6 +47,8 @@ pub fn router(state: AppState) -> Router {
         .route("/sandboxes/{id}/start", post(start))
         .route("/sandboxes/{id}/stop", post(stop))
         .route("/sandboxes/{id}/reset", post(reset))
+        .route("/sandboxes/{id}/copy-in", post(copy_in))
+        .route("/sandboxes/{id}/copy-out", post(copy_out))
         .layer(middleware::from_fn_with_state(state.clone(), require_token));
 
     Router::new().nest("/api/v1", v1).with_state(state)
@@ -48,13 +65,13 @@ async fn list(State(state): State<AppState>) -> Json<serde_json::Value> {
 async fn create(
     State(state): State<AppState>,
     body: Option<Json<CreateBody>>,
-) -> (StatusCode, Json<serde_json::Value>) {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let name = body.and_then(|Json(b)| b.name);
-    let sandbox = state.store.create(name);
-    (
+    let sandbox = state.store.create(name).map_err(map_err)?;
+    Ok((
         StatusCode::CREATED,
         Json(serde_json::to_value(sandbox).expect("sandbox json")),
-    )
+    ))
 }
 
 async fn get_one(
@@ -94,6 +111,22 @@ async fn destroy(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn copy_in(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<CopyInBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    action(state.store.copy_in(id, &body.from, body.replace))
+}
+
+async fn copy_out(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<CopyOutBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    action(state.store.copy_out(id, &body.to, body.replace))
+}
+
 fn action(
     result: Result<crate::sandbox::Sandbox, ActionError>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
@@ -105,6 +138,10 @@ fn map_err(err: ActionError) -> (StatusCode, Json<serde_json::Value>) {
     match err {
         ActionError::NotFound => error_body(StatusCode::NOT_FOUND, "not_found", None),
         ActionError::Conflict(detail) => error_body(StatusCode::CONFLICT, "conflict", Some(detail)),
+        ActionError::BadRequest(detail) => {
+            error_body(StatusCode::BAD_REQUEST, "bad_request", Some(detail))
+        }
+        ActionError::Internal => error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal", None),
     }
 }
 
@@ -130,11 +167,13 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    fn app() -> Router {
-        router(AppState {
+    fn harness() -> (tempfile::TempDir, AppState) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState {
             token: "test-token".into(),
-            store: Arc::new(Store::new()),
-        })
+            store: Arc::new(Store::open(dir.path()).unwrap()),
+        };
+        (dir, state)
     }
 
     async fn send(app: Router, req: Request<Body>) -> (StatusCode, serde_json::Value) {
@@ -155,8 +194,9 @@ mod tests {
 
     #[tokio::test]
     async fn no_token_is_unauthorized() {
+        let (_dir, state) = harness();
         let (status, json) = send(
-            app(),
+            router(state),
             Request::get("http://127.0.0.1/api/v1/health")
                 .body(Body::empty())
                 .unwrap(),
@@ -168,8 +208,9 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_token_is_unauthorized() {
+        let (_dir, state) = harness();
         let (status, json) = send(
-            app(),
+            router(state),
             Request::get("http://127.0.0.1/api/v1/health")
                 .header("Authorization", "Bearer nope")
                 .body(Body::empty())
@@ -182,8 +223,9 @@ mod tests {
 
     #[tokio::test]
     async fn health_ok() {
+        let (_dir, state) = harness();
         let (status, json) = send(
-            app(),
+            router(state),
             authed(Request::get("http://127.0.0.1/api/v1/health"))
                 .body(Body::empty())
                 .unwrap(),
@@ -195,10 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn sandbox_lifecycle() {
-        let state = AppState {
-            token: "test-token".into(),
-            store: Arc::new(Store::new()),
-        };
+        let (_dir, state) = harness();
         let make = || router(state.clone());
 
         let (status, created) = send(
@@ -274,5 +313,51 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(json["error"], "not_found");
+    }
+
+    #[tokio::test]
+    async fn copy_in_out_replace() {
+        let (dir, state) = harness();
+        let make = || router(state.clone());
+        let (status, created) = send(
+            make(),
+            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = created["id"].as_str().unwrap();
+        assert_eq!(created["home"][0], ".gitconfig");
+
+        let src = dir.path().join("proj");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a"), "1").unwrap();
+        let copy_in = format!("http://127.0.0.1/api/v1/sandboxes/{id}/copy-in");
+        let body = serde_json::json!({ "from": src, "replace": false });
+        let (status, _) = send(
+            make(),
+            authed(Request::post(&copy_in))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let dest = dir.path().join("out");
+        let copy_out = format!("http://127.0.0.1/api/v1/sandboxes/{id}/copy-out");
+        let body = serde_json::json!({ "to": dest, "replace": false });
+        let (status, _) = send(
+            make(),
+            authed(Request::post(&copy_out))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(std::fs::read_to_string(dest.join("a")).unwrap(), "1");
     }
 }
