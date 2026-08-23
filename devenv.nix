@@ -5,6 +5,11 @@
 {
   languages.rust.enable = true;
 
+  # Bun is the JS toolchain for the Canvas (ADR 0021). Do not fall through
+  # to a host node/npm. bun.install waits until there is a package.json.
+  languages.javascript.enable = true;
+  languages.javascript.bun.enable = true;
+
   packages = [
     pkgs.git
     pkgs.gh
