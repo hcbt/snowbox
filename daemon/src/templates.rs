@@ -109,6 +109,19 @@ mod tests {
     }
 
     #[test]
+    fn shipped_environment_lists_empty() {
+        let lib = Library {
+            shipped: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../environment"),
+            user: PathBuf::from("/tmp/snowbox-no-user-templates"),
+        };
+        let list = lib.list().unwrap();
+        assert!(
+            list.iter().any(|t| t.name == "empty" && t.shipped),
+            "shipped templates: {list:?}"
+        );
+    }
+
+    #[test]
     fn refuses_to_overwrite_shipped() {
         let dir = tempfile::tempdir().unwrap();
         let shipped = dir.path().join("shipped/empty");

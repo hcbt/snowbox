@@ -15,7 +15,9 @@ pub fn handle_socket(stream: UnixStream) -> io::Result<()> {
 
     let mut child = unsafe {
         Command::new("runuser")
-            .args(["-u", "snow", "--", "/bin/bash", "-l"])
+            .args(["-u", "snow", "--"])
+            .arg(crate::bash_path())
+            .arg("-l")
             .stdin(Stdio::from(slave.try_clone()?))
             .stdout(Stdio::from(slave.try_clone()?))
             .stderr(Stdio::from(slave))

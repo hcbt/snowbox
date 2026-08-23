@@ -687,11 +687,15 @@ function OverlayDialog(props: {
           <label class={label}>
             template
             <select
-              class={field}
+              class={`${field} bg-white text-black`}
               value={tpl()}
               onChange={(e) => setTpl(e.currentTarget.value)}
             >
-              <For each={templates()} keyed={(t) => t.name}>
+              <option value="empty">empty</option>
+              <For
+                each={templates().filter((t) => t.name !== "empty")}
+                keyed={(t) => t.name}
+              >
                 {(t) => (
                   <option value={t().name}>
                     {t().name}

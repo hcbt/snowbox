@@ -15,6 +15,11 @@
           src = ./control;
           cargoLock.lockFile = ./control/Cargo.lock;
           doCheck = false;
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          postInstall = ''
+            wrapProgram $out/bin/snowbox-shell \
+              --set SNOWBOX_BASH ${lib.getExe pkgs.bashInteractive}
+          '';
         };
       mk =
         system:

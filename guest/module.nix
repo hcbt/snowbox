@@ -91,6 +91,7 @@
       isNormalUser = true;
       extraGroups = [ "wheel" ];
       home = "/home/snow";
+      shell = pkgs.bashInteractive;
     };
     users.users.root.hashedPassword = "!";
     security.sudo.wheelNeedsPassword = false;
@@ -118,7 +119,7 @@
     environment.systemPackages = [
       pkgs.nix
       pkgs.util-linux
-      pkgs.bash
+      pkgs.bashInteractive
     ];
 
     systemd.services.snowbox-agent = {
@@ -149,13 +150,16 @@
       serviceConfig = {
         ExecStart = "${lib.getExe' config.snowbox.control "snowbox-shell"}";
         Restart = "always";
-        Environment = "PATH=${
-          lib.makeBinPath [
-            pkgs.util-linux
-            pkgs.bash
-            pkgs.coreutils
-          ]
-        }";
+        Environment = [
+          "SNOWBOX_BASH=${lib.getExe pkgs.bashInteractive}"
+          "PATH=${
+            lib.makeBinPath [
+              pkgs.util-linux
+              pkgs.bashInteractive
+              pkgs.coreutils
+            ]
+          }"
+        ];
       };
     };
   };
