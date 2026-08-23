@@ -40,6 +40,7 @@ pub enum ActionError {
     NotFound,
     Conflict(&'static str),
     BadRequest(&'static str),
+    Failed(String),
     Internal,
 }
 
@@ -49,6 +50,7 @@ impl std::fmt::Display for ActionError {
             Self::NotFound => write!(f, "not found"),
             Self::Conflict(d) => write!(f, "{d}"),
             Self::BadRequest(d) => write!(f, "{d}"),
+            Self::Failed(d) => write!(f, "{d}"),
             Self::Internal => write!(f, "internal error"),
         }
     }
@@ -117,6 +119,7 @@ impl Store {
         fs::create_dir_all(dir.join("workspace")).map_err(|_| ActionError::Internal)?;
         fs::create_dir_all(dir.join("home")).map_err(|_| ActionError::Internal)?;
         fs::create_dir_all(dir.join("system")).map_err(|_| ActionError::Internal)?;
+        crate::environment::write_default(&dir)?;
         write_meta(&dir, &meta)?;
         let sandbox = view(&Record {
             meta: meta.clone(),
@@ -231,7 +234,7 @@ impl Store {
         Ok(view(rec))
     }
 
-    fn dir(&self, id: Uuid) -> PathBuf {
+    pub(crate) fn dir(&self, id: Uuid) -> PathBuf {
         self.root.join(id.to_string())
     }
 }
@@ -270,7 +273,12 @@ fn reset_tree(dir: &Path, home_allow: &[String]) -> Result<(), ActionError> {
     for entry in fs::read_dir(dir).map_err(|_| ActionError::Internal)? {
         let entry = entry.map_err(|_| ActionError::Internal)?;
         let name = entry.file_name();
-        if name == "workspace" || name == "home" || name == "system" || name == "meta.json" {
+        if name == "workspace"
+            || name == "home"
+            || name == "system"
+            || name == "meta.json"
+            || name == "environment"
+        {
             continue;
         }
         let path = entry.path();
@@ -466,6 +474,16 @@ mod tests {
         assert!(!dir.join("system/undeclared").exists());
         assert!(!dir.join("extra").exists());
         assert!(dir.join("system").is_dir());
+        assert!(dir.join("environment/flake.nix").is_file());
+    }
+
+    #[test]
+    fn create_writes_host_environment_flake() {
+        let (_tmp, store) = store();
+        let sb = store.create(None).unwrap();
+        let flake = fs::read_to_string(store.dir(sb.id).join("environment/flake.nix")).unwrap();
+        assert!(flake.contains("nixos-26.05"));
+        assert!(!store.dir(sb.id).join("workspace/flake.nix").exists());
     }
 
     #[test]

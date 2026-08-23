@@ -12,12 +12,14 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::auth::require_token;
-use crate::sandbox::{ActionError, Store};
+use crate::sandbox::{ActionError, State as SandboxState, Store};
+use crate::vz::Hypervisor;
 
 #[derive(Clone)]
 pub struct AppState {
     pub token: String,
     pub store: Arc<Store>,
+    pub vmm: Option<Arc<Hypervisor>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -86,6 +88,14 @@ async fn start(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(vmm) = state.vmm.clone() {
+        let store = state.store.clone();
+        let result = tokio::task::spawn_blocking(move || boot(store, vmm, id))
+            .await
+            .map_err(|_| ActionError::Internal)
+            .and_then(|r| r);
+        return action(result);
+    }
     action(state.store.start(id))
 }
 
@@ -93,6 +103,14 @@ async fn stop(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(vmm) = state.vmm.clone() {
+        let store = state.store.clone();
+        let result = tokio::task::spawn_blocking(move || halt(store, vmm, id))
+            .await
+            .map_err(|_| ActionError::Internal)
+            .and_then(|r| r);
+        return action(result);
+    }
     action(state.store.stop(id))
 }
 
@@ -107,6 +125,20 @@ async fn destroy(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(vmm) = state.vmm.clone() {
+        let store = state.store.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            if store.get(id).map(|s| s.state).ok() == Some(SandboxState::Running) {
+                let _ = halt(store.clone(), vmm, id);
+            }
+            store.destroy(id)
+        })
+        .await
+        .map_err(|_| ActionError::Internal)
+        .and_then(|r| r);
+        result.map_err(map_err)?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
     state.store.destroy(id).map_err(map_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -127,6 +159,45 @@ async fn copy_out(
     action(state.store.copy_out(id, &body.to, body.replace))
 }
 
+fn boot(
+    store: Arc<Store>,
+    vmm: Arc<Hypervisor>,
+    id: Uuid,
+) -> Result<crate::sandbox::Sandbox, ActionError> {
+    let sandbox = store.get(id)?;
+    if sandbox.state != SandboxState::Stopped {
+        return Err(ActionError::Conflict("already running"));
+    }
+    let dir = store.dir(id);
+    vmm.start(id, &dir).map_err(ActionError::Failed)?;
+    if let Err(e) = crate::agent::wait_ready(&vmm, id, std::time::Duration::from_secs(90)) {
+        let _ = vmm.stop(id);
+        return Err(ActionError::Failed(e));
+    }
+    if let Err(e) = crate::agent::tar_in(&vmm, id, "/workspace", &dir.join("workspace")) {
+        let _ = vmm.stop(id);
+        return Err(ActionError::Failed(e));
+    }
+    let _ = crate::agent::tar_in(&vmm, id, "/home/snow", &dir.join("home"));
+    store.start(id)
+}
+
+fn halt(
+    store: Arc<Store>,
+    vmm: Arc<Hypervisor>,
+    id: Uuid,
+) -> Result<crate::sandbox::Sandbox, ActionError> {
+    let sandbox = store.get(id)?;
+    if sandbox.state != SandboxState::Running {
+        return Err(ActionError::Conflict("already stopped"));
+    }
+    let dir = store.dir(id);
+    let _ = crate::agent::tar_out(&vmm, id, "/workspace", &dir.join("workspace"));
+    let _ = crate::agent::tar_out(&vmm, id, "/home/snow", &dir.join("home"));
+    vmm.stop(id).map_err(ActionError::Failed)?;
+    store.stop(id)
+}
+
 fn action(
     result: Result<crate::sandbox::Sandbox, ActionError>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
@@ -140,6 +211,9 @@ fn map_err(err: ActionError) -> (StatusCode, Json<serde_json::Value>) {
         ActionError::Conflict(detail) => error_body(StatusCode::CONFLICT, "conflict", Some(detail)),
         ActionError::BadRequest(detail) => {
             error_body(StatusCode::BAD_REQUEST, "bad_request", Some(detail))
+        }
+        ActionError::Failed(detail) => {
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal", Some(&detail))
         }
         ActionError::Internal => error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal", None),
     }
@@ -172,6 +246,7 @@ mod tests {
         let state = AppState {
             token: "test-token".into(),
             store: Arc::new(Store::open(dir.path()).unwrap()),
+            vmm: None,
         };
         (dir, state)
     }

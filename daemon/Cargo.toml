@@ -18,10 +18,16 @@ hex = "0.4"
 rand = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tar = "0.4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+dispatch2 = "0.3"
+libc = "0.2"
+objc2 = "0.6"
+objc2-foundation = "0.3"
 objc2-virtualization = "0.3"
 
 [dev-dependencies]

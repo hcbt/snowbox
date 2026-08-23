@@ -8,9 +8,14 @@ use anyhow::{Context, Result};
 use axum::response::Html;
 use rand::Rng;
 
+mod agent;
 mod api;
 mod auth;
+mod cache;
+mod environment;
+mod runtime;
 mod sandbox;
+mod sign;
 mod vz;
 
 const FALLBACK_CANVAS: &str = r#"<!doctype html>
@@ -37,19 +42,48 @@ fn bind_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 5418))
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    sign::ensure_signed();
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("tokio runtime")?;
+    runtime.spawn(async {
+        if let Err(e) = run_daemon().await {
+            eprintln!("{e:#}");
+            std::process::exit(1);
+        }
+        std::process::exit(0);
+    });
+    vz::pump_main_run_loop();
+    Ok(())
+}
+
+async fn run_daemon() -> Result<()> {
     let token_path = token_path()?;
     let token = load_or_create_token(&token_path)?;
 
     let data = dirs::data_dir()
         .context("no data directory")?
-        .join("snowbox")
-        .join("sandboxes");
-    let store = sandbox::Store::open(&data).context("open sandbox store")?;
+        .join("snowbox");
+    let store = sandbox::Store::open(data.join("sandboxes")).context("open sandbox store")?;
+    let cache = cache::Cache::open(data.join("cache")).context("open cache")?;
+    let vmm = runtime::Runtime::discover().map(|rt| {
+        eprintln!(
+            "runtime {}",
+            rt.kernel.parent().unwrap_or(rt.kernel.as_path()).display()
+        );
+        Arc::new(vz::Hypervisor::new(rt))
+    });
+    if vmm.is_none() {
+        eprintln!("runtime missing (build guest, or set SNOWBOX_RUNTIME)");
+    }
+    eprintln!("cache {}", cache.root().display());
     let state = api::AppState {
         token,
         store: Arc::new(store),
+        vmm,
     };
     let app = api::router(state).fallback(canvas);
 

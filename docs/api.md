@@ -16,13 +16,15 @@ The token is a file in the Host config directory (`snowbox/token` under `dirs::c
 
 ## Sandboxes
 
-Each Sandbox has a disk the Daemon owns on the Host (under the data directory, `snowbox/sandboxes/{id}`). That disk holds Workspace (`/workspace`), Home (allowlist), and a system tree (the Environment). The Host has no live view: do not treat those paths as the project. Quit the Daemon: running guests stop; disks stay. Destroy is the only verb that deletes the Workspace.
+Each Sandbox has a disk the Daemon owns on the Host (under the data directory, `snowbox/sandboxes/{id}`). That disk holds Workspace (`/workspace`), Home (allowlist), a system tree, and the Environment flake (a Host document, never `/workspace`). Start boots a Nix-built Linux guest via Virtualization.framework (macOS). The guest root is a copy of the runtime disk; Workspace and Home are synced over vsock, not a Host mount. Quit the Daemon: running guests stop; disks stay. Destroy is the only verb that deletes the Workspace.
+
+The Cache is a Snowbox store under the data directory (`snowbox/cache`), a `file://` substituter the Daemon writes. Guests copy from it; they do not share `/nix/store` with the Host.
 
 JSON `state` is `stopped` or `running`. `home` is the allowlist of paths under the guest home that survive Reset. v1 default: `.gitconfig`.
 
 Copy-in and copy-out run only while `stopped` (`409` `sandbox is running` otherwise). Non-empty destination without `"replace": true` → `409` `replace required`. No merge. A directory source is copied as the contents of `/workspace`; a file lands as `/workspace/{filename}`.
 
-Reset restores the system tree (drops undeclared tools), keeps Workspace, and keeps only allowlisted Home paths. Environment *realization* into that system tree is a later concern; Reset still wipes undeclared files there.
+Reset restores the system (drops the writable guest disk so the next start is a fresh root), keeps Workspace, keeps the Environment flake, and keeps only allowlisted Home paths.
 
 | Method | Path | Meaning |
 | --- | --- | --- |
