@@ -7,7 +7,10 @@
     { nixpkgs, ... }:
     let
       system = "aarch64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
+      pkgs = import nixpkgs {
+        inherit system;
+        config.allowUnfree = true;
+      };
       names = builtins.fromJSON (builtins.readFile ./packages.json);
     in
     {
