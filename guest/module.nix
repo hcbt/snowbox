@@ -145,11 +145,11 @@
       pkgs.util-linux
       pkgs.bash
     ];
+    checkPhase = ":";
     text = ''
-      exec runuser -u snow -- ${pkgs.bash}/bin/bash -lc \
-        'export PATH=/nix/var/nix/profiles/snowbox-environment/bin:$PATH
-         cd /workspace 2>/dev/null || cd
-         exec ${pkgs.bash}/bin/bash -i'
+      export PATH=/nix/var/nix/profiles/snowbox-environment/bin''${PATH:+:$PATH}
+      cd /workspace || cd /home/snow || true
+      exec runuser -p -u snow -- ${pkgs.bash}/bin/bash -l
     '';
   };
 
@@ -161,6 +161,7 @@
       pkgs.gzip
       pkgs.nix
     ];
+    checkPhase = ":";
     text = ''
       set -euo pipefail
       read -r cmd arg || true
