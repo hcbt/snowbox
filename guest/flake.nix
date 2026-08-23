@@ -14,7 +14,9 @@
       };
       pkgs = nixos.pkgs;
       kernelFile = pkgs.stdenv.hostPlatform.linux-kernel.target;
-      cmdline = lib.concatStringsSep " " nixos.config.boot.kernelParams;
+      cmdline = lib.concatStringsSep " " (
+        [ "init=${nixos.config.system.build.toplevel}/init" ] ++ nixos.config.boot.kernelParams
+      );
       image = nixos.config.system.build.images.sandbox;
     in
     {
