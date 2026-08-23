@@ -3,8 +3,8 @@ import { Term } from "./term";
 import { Frame } from "./frame";
 import {
   api,
+  type AgentProgram,
   type Layout,
-  type PackageHit,
   type Published,
   type Sandbox,
   type Template,
@@ -16,7 +16,7 @@ type Overlay =
   | { kind: "sandbox"; x: number; y: number }
   | { kind: "sandboxes"; x: number; y: number }
   | { kind: "limits"; id: string; x: number; y: number }
-  | { kind: "packages"; id: string; x: number; y: number }
+  | { kind: "hatch"; id: string; x: number; y: number }
   | { kind: "save-template"; id: string; x: number; y: number }
   | { kind: "publish"; id: string; x: number; y: number }
   | { kind: "copy"; id: string; dir: "in" | "out"; x: number; y: number }
@@ -321,9 +321,9 @@ export function App() {
             const sb = targetSandbox();
             if (sb) setOverlay({ kind: "limits", id: sb.id, ...placeOverlay() });
           }}
-          onPackages={() => {
+          onHatch={() => {
             const sb = targetSandbox();
-            if (sb) setOverlay({ kind: "packages", id: sb.id, ...placeOverlay() });
+            if (sb) setOverlay({ kind: "hatch", id: sb.id, ...placeOverlay() });
           }}
           onPublish={() => {
             const sb = targetSandbox();
@@ -392,7 +392,7 @@ function RootMenu(props: {
   onReset: () => void;
   onToggleIcons: () => void;
   onLimits: () => void;
-  onPackages: () => void;
+  onHatch: () => void;
   onPublish: () => void;
   onCopy: (dir: "in" | "out") => void;
   close: () => void;
@@ -472,8 +472,8 @@ function RootMenu(props: {
       <button type="button" class={item} disabled={!sb()} onClick={() => go(props.onLimits)}>
         Limits of {sb()?.name ?? ""}…
       </button>
-      <button type="button" class={item} disabled={!sb()} onClick={() => go(props.onPackages)}>
-        Packages of {sb()?.name ?? ""}…
+      <button type="button" class={item} disabled={!sb()} onClick={() => go(props.onHatch)}>
+        Hatch {sb()?.name ?? ""}…
       </button>
       <button
         type="button"
@@ -540,10 +540,8 @@ function OverlayDialog(props: {
   );
   const [tpl, setTpl] = createSignal("empty");
   const [templates, setTemplates] = createSignal<Template[]>([]);
-  const [pkg, setPkg] = createSignal("");
-  const [unfree, setUnfree] = createSignal(false);
-  const [hits, setHits] = createSignal<PackageHit[]>([]);
-  const [installed, setInstalled] = createSignal<string[]>([]);
+  const [agents, setAgents] = createSignal<AgentProgram[]>([]);
+  const [envCfg, setEnvCfg] = createSignal<Record<string, Record<string, unknown>>>({});
   const [path, setPath] = createSignal("");
   const [pubPort, setPubPort] = createSignal("3000");
   const [hostPort, setHostPort] = createSignal("");
@@ -557,25 +555,16 @@ function OverlayDialog(props: {
     if (props.overlay.kind === "publish" && props.sandbox) {
       api.published(props.sandbox.id).then((r) => setPublished(r.published)).catch(() => {});
     }
-    if (props.overlay.kind !== "packages" || !props.sandbox) return;
-    api
-      .packages(props.sandbox.id)
-      .then((r) => setInstalled(r.packages))
+    if (props.overlay.kind !== "hatch" || !props.sandbox) return;
+    const id = props.sandbox.id;
+    Promise.all([api.agentOptions(), api.environment(id)])
+      .then(([opts, cfg]) => {
+        setAgents(opts.programs);
+        const programs = (cfg.programs ?? {}) as Record<string, Record<string, unknown>>;
+        setEnvCfg(programs);
+      })
       .catch(() => {});
   });
-
-  const look = async (q: string) => {
-    setPkg(q);
-    if (q.trim().length < 2) {
-      setHits([]);
-      return;
-    }
-    try {
-      setHits((await api.searchPackages(q.trim(), unfree())).packages);
-    } catch {
-      setHits([]);
-    }
-  };
 
   const sbName = () => props.sandbox?.name ?? "";
 
@@ -584,7 +573,7 @@ function OverlayDialog(props: {
     if (ov.kind === "sandbox") return "New Sandbox";
     if (ov.kind === "sandboxes") return "Sandboxes";
     if (ov.kind === "limits") return `Limits — ${sbName()}`;
-    if (ov.kind === "packages") return `Packages — ${sbName()}`;
+    if (ov.kind === "hatch") return `Hatch — ${sbName()}`;
     if (ov.kind === "save-template") return `Save ${sbName()} as Template`;
     if (ov.kind === "publish") return `Publish — ${sbName()}`;
     if (ov.kind === "destroy") return `Destroy ${sbName()}`;
@@ -617,10 +606,8 @@ function OverlayDialog(props: {
           disk: Number(disk()) * 1024 * 1024 * 1024,
         }),
       );
-    } else if (ov.kind === "packages") {
-      const first = hits()[0];
-      if (first) props.run(() => api.addPackage(ov.id, first.name));
-      else return;
+    } else if (ov.kind === "hatch") {
+      props.run(() => api.saveEnvironment(ov.id, { programs: envCfg() }));
     } else if (ov.kind === "copy") {
       props.run(() =>
         ov.dir === "in"
@@ -688,8 +675,8 @@ function OverlayDialog(props: {
         </Show>
         <Show when={props.overlay.kind === "reset"}>
           <p class="text-[13px]">
-            Reset {sbName()}? Declared Packages stay. Undeclared tools are gone.
-            Workspace and Home remain.
+            Reset {sbName()}? Declared Agents and devenv stay. Undeclared tools
+            are gone. Workspace and Home remain.
           </p>
         </Show>
         <Show when={props.overlay.kind === "sandbox"}>
@@ -755,51 +742,58 @@ function OverlayDialog(props: {
             <input class={field} value={disk()} onInput={(e) => setDisk(e.currentTarget.value)} />
           </label>
         </Show>
-        <Show when={props.overlay.kind === "packages"}>
-          <div class="text-[12px]">{installed().join(", ") || "none yet"}</div>
-          <label class={label}>
-            search
-            <input
-              class={field}
-              value={pkg()}
-              placeholder="program or description"
-              onInput={(e) => look(e.currentTarget.value)}
-            />
-          </label>
-          <label class="mt-2 flex items-center gap-2 font-bold">
-            <input
-              type="checkbox"
-              checked={unfree()}
-              onChange={(e) => {
-                setUnfree(e.currentTarget.checked);
-                if (pkg().trim().length >= 2) look(pkg());
-              }}
-            />
-            unfree
-          </label>
-          <div class="mt-2 max-h-48 overflow-y-auto border border-neutral-400">
-            <For
-              each={hits()}
-              keyed={(h) => h.name}
-              fallback={<div class="px-2 py-1 text-[12px]">no matches</div>}
-            >
-              {(h) => (
-                <button
-                  type="button"
-                  class="block w-full border-0 border-t border-neutral-300 bg-white px-2 py-1 text-left hover:bg-twm-hi hover:text-white"
-                  onClick={() => {
-                    const ov = props.overlay;
-                    if (ov.kind !== "packages") return;
-                    props.run(() => api.addPackage(ov.id, h().name));
-                    props.close();
-                  }}
-                >
-                  <span class="font-bold">{h().program}</span>
-                  <span class="ml-2 text-[12px]">{h().description}</span>
-                </button>
-              )}
-            </For>
-          </div>
+        <Show when={props.overlay.kind === "hatch"}>
+          <p class="text-[12px]">devenv is always in the Environment. Secrets stay out of the flake.</p>
+          <For
+            each={agents()}
+            keyed={(p) => p.name}
+            fallback={<div class="text-[12px]">no Agents</div>}
+          >
+            {(p) => {
+              const name = p().name;
+              const cur = () => envCfg()[name] ?? {};
+              const enabled = () => Boolean(cur().enable);
+              const settings = () =>
+                JSON.stringify(cur().settings ?? {}, null, 2);
+              return (
+                <div class="mt-2 border-t border-neutral-300 pt-2">
+                  <label class="flex items-center gap-2 font-bold">
+                    <input
+                      type="checkbox"
+                      checked={enabled()}
+                      onChange={(e) => {
+                        const on = e.currentTarget.checked;
+                        setEnvCfg({
+                          ...envCfg(),
+                          [name]: { ...cur(), enable: on },
+                        });
+                      }}
+                    />
+                    {name}
+                  </label>
+                  <div class="text-[11px] text-neutral-600">{p().description}</div>
+                  <label class={label}>
+                    settings
+                    <textarea
+                      class={`${field} h-24`}
+                      value={settings()}
+                      onChange={(e) => {
+                        try {
+                          const parsed = JSON.parse(e.currentTarget.value || "{}");
+                          setEnvCfg({
+                            ...envCfg(),
+                            [name]: { ...cur(), settings: parsed },
+                          });
+                        } catch {
+                          /* keep typing */
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+              );
+            }}
+          </For>
         </Show>
         <Show when={props.overlay.kind === "copy"}>
           <label class={label}>

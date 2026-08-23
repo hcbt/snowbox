@@ -1,0 +1,7 @@
+{
+  "programs": {
+    "claude-code": { "enable": false },
+    "codex": { "enable": false },
+    "pi-coding-agent": { "enable": false }
+  }
+}

@@ -506,9 +506,13 @@ mod tests {
 
         let b = dir.path().join("b");
         crate::environment::write_default(&b).unwrap();
-        // Different Packages must not force a cold boot; the snapshot is
+        // Different Environment must not force a cold boot; the snapshot is
         // the guest runtime, and Environment is applied after restore.
-        std::fs::write(b.join("environment/packages.json"), r#"["hello"]"#).unwrap();
+        std::fs::write(
+            b.join("environment/config.json"),
+            r#"{"programs":{"claude-code":{"enable":true}}}"#,
+        )
+        .unwrap();
         let id = Uuid::from_u128(6);
         assert_eq!(hv.start(id, &b, limits()).unwrap(), StartKind::Restored);
         assert_eq!(*fake.restores.lock().unwrap(), vec![id]);

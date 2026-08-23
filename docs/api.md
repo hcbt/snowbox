@@ -32,9 +32,10 @@ Reset restores the system (drops the writable guest disk so the next start is a 
 | --- | --- | --- |
 | `GET` | `/health` | `{"ok":true}` |
 | `GET` | `/sandboxes` | List |
-| `POST` | `/sandboxes` | Create. Body `{"name": "...", "limits": {...}, "template": "python"}` — all optional. `template` is a Template name. `201` |
+| `POST` | `/sandboxes` | Create. Body `{"name": "...", "limits": {...}, "template": "empty"}` — all optional. `template` is a Template name. `201` |
 | `GET` | `/templates` | Shipped and saved Templates. |
 | `POST` | `/templates` | Save the current Environment as a Template. Body `{"name":"work","sandbox":"<id>"}`. `201`. Cannot overwrite a shipped Template. |
+| `GET` | `/agent-options` | home-manager Agent option schema the hatch renders. |
 | `GET` | `/sandboxes/{id}` | One record. `404` if missing |
 | `PATCH` | `/sandboxes/{id}` | Update Limits. Body `{"limits":{"cpu":4,"ram":4294967296,"disk":34359738368}}` — any field optional. Applied on the next start. `404` if missing |
 | `POST` | `/sandboxes/{id}/start` | `stopped` → `running`. Restores machine state when present, otherwise boots. `409` if already running |
@@ -42,9 +43,8 @@ Reset restores the system (drops the writable guest disk so the next start is a 
 | `POST` | `/sandboxes/{id}/reset` | Keep Workspace + Home allowlist; restore system. `404` if missing |
 | `POST` | `/sandboxes/{id}/copy-in` | Body `{"from":"/host/path","replace":false}` |
 | `POST` | `/sandboxes/{id}/copy-out` | Body `{"to":"/host/path","replace":false}` |
-| `GET` | `/packages?q=&unfree=` | Search nixpkgs by program name or description. `unfree=true` includes unfree Packages (off by default). |
-| `GET` | `/sandboxes/{id}/packages` | Environment package names (nixpkgs attributes). |
-| `POST` | `/sandboxes/{id}/packages` | Body `{"add":"hello"}`. `add` is the catalog name from search. Updates the Host Environment. If the Sandbox is running, realises into the Cache and copies into the guest (no reboot). |
+| `GET` | `/sandboxes/{id}/environment` | Current home-manager Agent config (`config.json`). |
+| `PUT` | `/sandboxes/{id}/environment` | Replace that config. Updates the Host Environment. If the Sandbox is running, realises into the Cache and activates (no reboot). |
 | `GET` | `/sandboxes/{id}/publish` | Published ports for this Sandbox. Empty while none. |
 | `POST` | `/sandboxes/{id}/publish` | Body `{"port":3000,"host_port":null}`. Bind `127.0.0.1` only. Sandbox must be running. `201` `{port,host_port,url}`. |
 | `DELETE` | `/sandboxes/{id}/publish/{port}` | Drop a published port. `204` |

@@ -1,0 +1,58 @@
+{
+  "programs": [
+    {
+      "name": "claude-code",
+      "description": "Claude Code (home-manager programs.claude-code)",
+      "options": [
+        {
+          "name": "enable",
+          "type": "boolean",
+          "default": false,
+          "description": "Install and configure Claude Code."
+        },
+        {
+          "name": "settings",
+          "type": "json",
+          "default": {},
+          "description": "JSON written to Claude Code settings. Not for secrets."
+        }
+      ]
+    },
+    {
+      "name": "codex",
+      "description": "Codex (home-manager programs.codex)",
+      "options": [
+        {
+          "name": "enable",
+          "type": "boolean",
+          "default": false,
+          "description": "Install and configure Codex."
+        },
+        {
+          "name": "settings",
+          "type": "json",
+          "default": {},
+          "description": "JSON written to Codex settings. Not for secrets."
+        }
+      ]
+    },
+    {
+      "name": "pi-coding-agent",
+      "description": "Pi (home-manager programs.pi-coding-agent)",
+      "options": [
+        {
+          "name": "enable",
+          "type": "boolean",
+          "default": false,
+          "description": "Install and configure Pi Coding Agent."
+        },
+        {
+          "name": "settings",
+          "type": "json",
+          "default": {},
+          "description": "JSON written to ~/.pi/agent/settings.json. Not for secrets."
+        }
+      ]
+    }
+  ]
+}

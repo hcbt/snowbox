@@ -8,216 +8,155 @@
   ...
 }:
 {
-  system.stateVersion = "26.05";
-
-  boot.loader.external = {
-    enable = true;
-    installHook = pkgs.writeScript "snowbox-no-bootloader" ''
-      #!${pkgs.runtimeShell}
-      exit 0
-    '';
+  options.snowbox.control = lib.mkOption {
+    type = lib.types.package;
+    description = "Guest control plane (snowbox-agent, snowbox-shell).";
   };
 
-  boot.kernelParams = [
-    "console=hvc0"
-    "systemd.journald.forward_to_console=1"
-  ];
+  config = {
+    system.stateVersion = "26.05";
 
-  boot.initrd.availableKernelModules = [
-    "virtio_net"
-    "virtio_pci"
-    "virtio_mmio"
-    "virtio_blk"
-    "virtio_console"
-    "vmw_vsock_virtio_transport"
-    "vsock"
-    "ext4"
-  ];
-  boot.kernelModules = [
-    "vmw_vsock_virtio_transport"
-    "vsock"
-  ];
+    boot.loader.external = {
+      enable = true;
+      installHook = "${pkgs.coreutils}/bin/true";
+    };
 
-  fileSystems."/" = {
-    device = "/dev/disk/by-label/nixos";
-    fsType = "ext4";
-    neededForBoot = true;
-  };
+    boot.kernelParams = [
+      "console=hvc0"
+      "systemd.journald.forward_to_console=1"
+    ];
 
-  image.modules.sandbox =
-    { config, modulesPath, ... }:
-    {
-      imports = [ (modulesPath + "/image/repart.nix") ];
-      image.repart = {
-        name = "snowbox";
-        # Without this, systemd-repart formats a 1 TiB ext4 (67M inodes)
-        # before Minimize. The Daemon grows the disk to the Sandbox Limit.
-        imageSize = "4G";
-        partitions."10-root" = {
-          storePaths = [ config.system.build.toplevel ];
-          repartConfig = {
-            Type = "root";
-            Format = "ext4";
-            Label = "nixos";
-            Minimize = "guess";
-            SizeMaxBytes = "4G";
+    boot.initrd.availableKernelModules = [
+      "virtio_net"
+      "virtio_pci"
+      "virtio_mmio"
+      "virtio_blk"
+      "virtio_console"
+      "vmw_vsock_virtio_transport"
+      "vsock"
+      "ext4"
+    ];
+    boot.kernelModules = [
+      "vmw_vsock_virtio_transport"
+      "vsock"
+    ];
+
+    fileSystems."/" = {
+      device = "/dev/disk/by-label/nixos";
+      fsType = "ext4";
+      neededForBoot = true;
+    };
+
+    image.modules.sandbox =
+      { config, modulesPath, ... }:
+      {
+        imports = [ (modulesPath + "/image/repart.nix") ];
+        image.repart = {
+          name = "snowbox";
+          # Without this, systemd-repart formats a 1 TiB ext4 (67M inodes)
+          # before Minimize. The Daemon grows the disk to the Sandbox Limit.
+          imageSize = "4G";
+          partitions."10-root" = {
+            storePaths = [ config.system.build.toplevel ];
+            repartConfig = {
+              Type = "root";
+              Format = "ext4";
+              Label = "nixos";
+              Minimize = "guess";
+              SizeMaxBytes = "4G";
+            };
           };
         };
       };
+
+    networking.hostName = "sandbox";
+    networking.useNetworkd = true;
+    networking.firewall.enable = false;
+    systemd.network.enable = true;
+    systemd.network.networks."20-virtio" = {
+      matchConfig.Driver = "virtio_net";
+      networkConfig.DHCP = "yes";
     };
 
-  networking.hostName = "sandbox";
-  networking.useNetworkd = true;
-  networking.firewall.enable = false;
-  systemd.network.enable = true;
-  systemd.network.networks."20-virtio" = {
-    matchConfig.Driver = "virtio_net";
-    networkConfig.DHCP = "yes";
-  };
+    nix.enable = true;
+    nix.channel.enable = false;
+    nix.settings.experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
 
-  nix.enable = true;
-  nix.channel.enable = false;
-  nix.settings.experimental-features = [
-    "nix-command"
-    "flakes"
-  ];
-
-  users.mutableUsers = false;
-  users.allowNoPasswordLogin = true;
-  users.users.snow = {
-    isNormalUser = true;
-    extraGroups = [ "wheel" ];
-    home = "/home/snow";
-  };
-  users.users.root.hashedPassword = "!";
-  security.sudo.wheelNeedsPassword = false;
-  services.getty.autologinUser = "snow";
-
-  systemd.tmpfiles.rules = [
-    "d /workspace 0755 snow snow -"
-  ];
-
-  # Same as a NixOS machine: PATH comes from environment.profiles, not
-  # from writing ~/.bashrc. PROFILE only installs the profile symlink.
-  environment.profiles = lib.mkBefore [ "/nix/var/nix/profiles/snowbox-environment" ];
-  environment.sessionVariables.TERM = "xterm-256color";
-  environment.sessionVariables.COLORTERM = "truecolor";
-
-  environment.defaultPackages = [ ];
-  documentation.enable = false;
-  documentation.doc.enable = false;
-  documentation.info.enable = false;
-  documentation.man.enable = false;
-  documentation.nixos.enable = false;
-  programs.command-not-found.enable = false;
-  programs.nano.enable = false;
-
-  environment.systemPackages = [
-    pkgs.socat
-    pkgs.gnutar
-    pkgs.gzip
-  ];
-
-  systemd.services.snowbox-agent = {
-    description = "Snowbox control plane";
-    wantedBy = [ "multi-user.target" ];
-    after = [ "local-fs.target" ];
-    serviceConfig = {
-      ExecStart = "${pkgs.socat}/bin/socat VSOCK-LISTEN:52,reuseaddr,fork EXEC:${lib.getExe config.system.build.snowbox-agent}";
-      Restart = "always";
+    users.mutableUsers = false;
+    users.allowNoPasswordLogin = true;
+    users.users.snow = {
+      isNormalUser = true;
+      extraGroups = [ "wheel" ];
+      home = "/home/snow";
     };
-  };
+    users.users.root.hashedPassword = "!";
+    security.sudo.wheelNeedsPassword = false;
+    services.getty.autologinUser = "snow";
 
-  # Window shells. The Daemon bridges a Host WebSocket to this vsock;
-  # the browser never talks to the guest. Each connect is a login shell
-  # for snow (closing the Window ends that shell).
-  systemd.services.snowbox-shell = {
-    description = "Snowbox Window shells";
-    wantedBy = [ "multi-user.target" ];
-    after = [ "local-fs.target" ];
-    serviceConfig = {
-      ExecStart = "${pkgs.socat}/bin/socat VSOCK-LISTEN:53,reuseaddr,fork EXEC:${lib.getExe config.system.build.snowbox-shell},pty,stderr,setsid,sigint,sane,ctty";
-      Restart = "always";
-    };
-  };
+    systemd.tmpfiles.rules = [
+      "d /workspace 0755 snow snow -"
+    ];
 
-  system.build.snowbox-shell = pkgs.writeShellApplication {
-    name = "snowbox-shell";
-    runtimeInputs = [
+    # Same as a NixOS machine: PATH comes from environment.profiles, not
+    # from writing ~/.bashrc. PROFILE only installs the profile symlink.
+    environment.profiles = lib.mkBefore [ "/nix/var/nix/profiles/snowbox-environment" ];
+    environment.sessionVariables.TERM = "xterm-256color";
+    environment.sessionVariables.COLORTERM = "truecolor";
+
+    environment.defaultPackages = [ ];
+    documentation.enable = false;
+    documentation.doc.enable = false;
+    documentation.info.enable = false;
+    documentation.man.enable = false;
+    documentation.nixos.enable = false;
+    programs.command-not-found.enable = false;
+    programs.nano.enable = false;
+
+    environment.systemPackages = [
+      pkgs.nix
       pkgs.util-linux
       pkgs.bash
     ];
-    checkPhase = ":";
-    text = ''
-      # socat's pty starts at 0x0; TUIs (grok) draw nothing until winsize is set.
-      stty rows 24 cols 80 || true
-      exec runuser -u snow -- ${pkgs.bash}/bin/bash -l
-    '';
-  };
 
-  system.build.snowbox-agent = pkgs.writeShellApplication {
-    name = "snowbox-agent";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.gnutar
-      pkgs.gzip
-      pkgs.nix
-      pkgs.util-linux
-    ];
-    checkPhase = ":";
-    text = ''
-      set -euo pipefail
-      read -r cmd arg || true
-      case "$cmd" in
-        PING)
-          printf 'PONG\n'
-          ;;
-        TAR_IN)
-          mkdir -p "$arg"
-          tar -C "$arg" --no-same-owner -xf -
-          chown -R snow:snow "$arg" 2>/dev/null || true
-          printf 'OK\n'
-          ;;
-        TAR_OUT)
-          tar -C "$arg" -cf - .
-          ;;
-        NAR_IN)
-          nix-store --import >/dev/null
-          printf 'OK\n'
-          ;;
-        PROFILE)
-          mkdir -p /nix/var/nix/profiles
-          ln -sfn "$arg" /nix/var/nix/profiles/snowbox-environment
-          printf 'OK\n'
-          ;;
-        RESET)
-          mkdir -p "$arg"
-          shopt -s dotglob nullglob
-          entries=("$arg"/*)
-          if (( ''${#entries[@]} )); then
-            rm -rf -- "''${entries[@]}"
-          fi
-          chown snow:snow "$arg" 2>/dev/null || true
-          printf 'OK\n'
-          ;;
-        STTY)
-          rows=''${arg%%x*}
-          cols=''${arg##*x}
-          for t in /dev/pts/*; do
-            [ -c "$t" ] || continue
-            [ "$t" = /dev/pts/ptmx ] && continue
-            stty rows "$rows" cols "$cols" <"$t" || true
-          done
-          printf 'OK\n'
-          ;;
-        CONNECT)
-          exec ${pkgs.socat}/bin/socat STDIO TCP:127.0.0.1:"$arg"
-          ;;
-        *)
-          printf 'ERR unknown\n' >&2
-          exit 1
-          ;;
-      esac
-    '';
+    systemd.services.snowbox-agent = {
+      description = "Snowbox control plane";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "local-fs.target" ];
+      serviceConfig = {
+        ExecStart = "${lib.getExe' config.snowbox.control "snowbox-agent"}";
+        Restart = "always";
+        Environment = "PATH=${
+          lib.makeBinPath [
+            pkgs.nix
+            pkgs.util-linux
+            pkgs.bash
+            pkgs.coreutils
+          ]
+        }";
+      };
+    };
+
+    # Window shells. The Daemon bridges a Host WebSocket to this vsock;
+    # the browser never talks to the guest. Each connect is a login shell
+    # for snow (closing the Window ends that shell).
+    systemd.services.snowbox-shell = {
+      description = "Snowbox Window shells";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "local-fs.target" ];
+      serviceConfig = {
+        ExecStart = "${lib.getExe' config.snowbox.control "snowbox-shell"}";
+        Restart = "always";
+        Environment = "PATH=${
+          lib.makeBinPath [
+            pkgs.util-linux
+            pkgs.bash
+            pkgs.coreutils
+          ]
+        }";
+      };
+    };
   };
 }

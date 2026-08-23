@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     middleware,
     routing::{get, post},
@@ -13,7 +13,6 @@ use uuid::Uuid;
 
 use crate::auth::require_token;
 use crate::cache::Cache;
-use crate::catalog::Catalog;
 use crate::layout::{Layout, LayoutStore};
 use crate::publish::Publisher;
 use crate::resume::Resume;
@@ -27,7 +26,6 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub cache: Arc<Cache>,
     pub layout: Arc<LayoutStore>,
-    pub catalog: Arc<Catalog>,
     pub templates: Arc<Library>,
     pub publish: Publisher,
     pub sessions: crate::pty::Sessions,
@@ -80,17 +78,7 @@ pub struct CopyOutBody {
     pub replace: bool,
 }
 
-#[derive(Deserialize)]
-pub struct AddPackageBody {
-    pub add: String,
-}
 
-#[derive(Deserialize)]
-pub struct SearchQuery {
-    pub q: String,
-    #[serde(default)]
-    pub unfree: bool,
-}
 
 pub fn router(state: AppState) -> Router {
     let v1 = Router::new()
@@ -102,7 +90,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sandboxes/{id}/reset", post(reset))
         .route("/sandboxes/{id}/copy-in", post(copy_in))
         .route("/sandboxes/{id}/copy-out", post(copy_out))
-        .route("/packages", get(search_packages))
+        .route("/agent-options", get(agent_options))
         .route("/templates", get(list_templates).post(save_template))
         .route(
             "/sandboxes/{id}/publish",
@@ -113,8 +101,8 @@ pub fn router(state: AppState) -> Router {
             axum::routing::delete(unpublish_port),
         )
         .route(
-            "/sandboxes/{id}/packages",
-            get(list_packages).post(add_package),
+            "/sandboxes/{id}/environment",
+            get(get_environment).put(put_environment),
         )
         .route("/layout", get(get_layout).put(put_layout))
         .route("/sandboxes/{id}/windows", post(open_window))
@@ -352,38 +340,26 @@ async fn save_template(
     ))
 }
 
-async fn search_packages(
-    State(state): State<AppState>,
-    Query(query): Query<SearchQuery>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let catalog = state.catalog.clone();
-    let q = query.q;
-    let unfree = query.unfree;
-    let hits = tokio::task::spawn_blocking(move || catalog.search(&q, unfree, 30))
-        .await
-        .map_err(|_| ActionError::Internal)
-        .and_then(|r| r)
-        .map_err(map_err)?;
-    Ok(Json(serde_json::json!({ "packages": hits })))
+async fn agent_options() -> Json<serde_json::Value> {
+    Json(serde_json::from_str(crate::environment::SCHEMA).expect("schema json"))
 }
 
-async fn list_packages(
+async fn get_environment(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let _ = state.store.get(id).map_err(map_err)?;
-    let pkgs = crate::environment::packages(&state.store.dir(id)).map_err(map_err)?;
-    Ok(Json(serde_json::json!({ "packages": pkgs })))
+    let cfg = crate::environment::config(&state.store.dir(id)).map_err(map_err)?;
+    Ok(Json(cfg))
 }
 
-async fn add_package(
+async fn put_environment(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    Json(body): Json<AddPackageBody>,
+    Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let sandbox = state.store.get(id).map_err(map_err)?;
-    let pkgs =
-        crate::environment::add_package(&state.store.dir(id), body.add.trim()).map_err(map_err)?;
+    let cfg = crate::environment::set_config(&state.store.dir(id), &body).map_err(map_err)?;
     if sandbox.state == SandboxState::Running {
         if let Some(vmm) = state.vmm.clone() {
             let store = state.store.clone();
@@ -395,7 +371,7 @@ async fn add_package(
                 .map_err(map_err)?;
         }
     }
-    Ok(Json(serde_json::json!({ "packages": pkgs })))
+    Ok(Json(cfg))
 }
 
 async fn get_layout(State(state): State<AppState>) -> Json<Layout> {
@@ -703,30 +679,10 @@ mod tests {
             publish: crate::publish::Publisher::default(),
             sessions: crate::pty::Sessions::default(),
             templates: Arc::new(crate::templates::Library {
-                shipped: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../templates"),
+                shipped: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../environment"),
                 user: dir.path().join("templates"),
             }),
             resume: Arc::new(crate::resume::Resume::open(dir.path().join("running.json"))),
-            catalog: Arc::new(crate::catalog::Catalog::memory(vec![
-                crate::catalog::Package {
-                    name: "jq".into(),
-                    program: "jq".into(),
-                    description: "Lightweight and flexible command-line JSON processor".into(),
-                    unfree: false,
-                },
-                crate::catalog::Package {
-                    name: "ripgrep".into(),
-                    program: "rg".into(),
-                    description: "fast line-oriented search tool".into(),
-                    unfree: false,
-                },
-                crate::catalog::Package {
-                    name: "unrar".into(),
-                    program: "unrar".into(),
-                    description: "RAR archive tool".into(),
-                    unfree: true,
-                },
-            ])),
             vmm: None,
         };
         (dir, state)
@@ -947,7 +903,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn packages_on_host_environment() {
+    async fn environment_is_home_manager_config() {
         let (_dir, state) = harness();
         let make = || router(state.clone());
         let (status, created) = send(
@@ -960,41 +916,31 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CREATED);
         let id = created["id"].as_str().unwrap();
-        let url = format!("http://127.0.0.1/api/v1/sandboxes/{id}/packages");
+        let url = format!("http://127.0.0.1/api/v1/sandboxes/{id}/environment");
         let (status, listed) = send(
             make(),
             authed(Request::get(&url)).body(Body::empty()).unwrap(),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(
-            listed["packages"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p == "hello")
-        );
+        assert_eq!(listed["programs"]["claude-code"]["enable"], false);
 
-        let (status, added) = send(
+        let (status, patched) = send(
             make(),
-            authed(Request::post(&url))
+            authed(Request::put(&url))
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"add":"jq"}"#))
+                .body(Body::from(
+                    r#"{"programs":{"claude-code":{"enable":true},"codex":{"enable":false},"pi-coding-agent":{"enable":false}}}"#,
+                ))
                 .unwrap(),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(
-            added["packages"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p == "jq")
-        );
+        assert_eq!(patched["programs"]["claude-code"]["enable"], true);
     }
 
     #[tokio::test]
-    async fn templates_ship_and_fill_environment() {
+    async fn templates_ship_empty() {
         let (_dir, state) = harness();
         let make = || router(state.clone());
         let (status, listed) = send(
@@ -1012,29 +958,8 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"empty"));
-        assert!(names.contains(&"python"));
-        assert!(names.contains(&"rust"));
-
-        let (status, created) = send(
-            make(),
-            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"template":"python"}"#))
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED);
-        let id = created["id"].as_str().unwrap();
-        let url = format!("http://127.0.0.1/api/v1/sandboxes/{id}/packages");
-        let (status, pkgs) = send(
-            make(),
-            authed(Request::get(&url)).body(Body::empty()).unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        let list = pkgs["packages"].as_array().unwrap();
-        assert!(list.iter().any(|p| p == "python3"));
-        assert!(!list.iter().any(|p| p == "hello"));
+        assert!(!names.contains(&"python"));
+        assert!(!names.contains(&"rust"));
     }
 
     #[tokio::test]
@@ -1066,67 +991,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn package_search_is_by_program_and_hides_unfree() {
+    async fn agent_options_are_home_manager_programs() {
         let (_dir, state) = harness();
-        let make = || router(state.clone());
-        let (status, hits) = send(
-            make(),
-            authed(Request::get("http://127.0.0.1/api/v1/packages?q=rg"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        let list = hits["packages"].as_array().unwrap();
-        assert!(
-            list.iter()
-                .any(|p| p["program"] == "rg" && p["name"] == "ripgrep")
-        );
-        assert!(list.iter().all(|p| p["unfree"] == false));
-
         let (status, json) = send(
-            make(),
-            authed(Request::get("http://127.0.0.1/api/v1/packages?q=json"))
+            router(state),
+            authed(Request::get("http://127.0.0.1/api/v1/agent-options"))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(
-            json["packages"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p["name"] == "jq")
-        );
-
-        let (status, hidden) = send(
-            make(),
-            authed(Request::get("http://127.0.0.1/api/v1/packages?q=unrar"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(hidden["packages"].as_array().unwrap().is_empty());
-
-        let (status, shown) = send(
-            make(),
-            authed(Request::get(
-                "http://127.0.0.1/api/v1/packages?q=unrar&unfree=true",
-            ))
-            .body(Body::empty())
-            .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(
-            shown["packages"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p["unfree"] == true && p["name"] == "unrar")
-        );
+        let names: Vec<&str> = json["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"claude-code"));
+        assert!(names.contains(&"codex"));
+        assert!(names.contains(&"pi-coding-agent"));
     }
 
     #[tokio::test]

@@ -7,14 +7,27 @@
     { nixpkgs, ... }:
     let
       lib = nixpkgs.lib;
+      mkControl =
+        pkgs:
+        pkgs.rustPlatform.buildRustPackage {
+          pname = "snowbox-guest";
+          version = "0.0.0";
+          src = ./control;
+          cargoLock.lockFile = ./control/Cargo.lock;
+          doCheck = false;
+        };
       mk =
         system:
         let
+          pkgs = import nixpkgs { inherit system; };
+          control = mkControl pkgs;
           nixos = nixpkgs.lib.nixosSystem {
             inherit system;
-            modules = [ ./module.nix ];
+            modules = [
+              ./module.nix
+              { snowbox.control = control; }
+            ];
           };
-          pkgs = nixos.pkgs;
           kernelFile = nixos.config.system.boot.loader.kernelFile;
           cmdline = lib.concatStringsSep " " (
             [ "init=${nixos.config.system.build.toplevel}/init" ] ++ nixos.config.boot.kernelParams
@@ -22,7 +35,7 @@
           image = nixos.config.system.build.images.sandbox;
         in
         rec {
-          inherit nixos;
+          inherit nixos control;
           kernel = nixos.config.system.build.kernel;
           initrd = nixos.config.system.build.initialRamdisk;
           toplevel = nixos.config.system.build.toplevel;
@@ -48,6 +61,7 @@
           toplevel
           rootfs
           runtime
+          control
           ;
         default = runtime;
       };
@@ -58,6 +72,7 @@
           toplevel
           rootfs
           runtime
+          control
           ;
         default = runtime;
       };

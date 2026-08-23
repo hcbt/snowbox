@@ -1,0 +1,23 @@
+[workspace]
+
+[package]
+name = "snowbox-guest"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Guest control plane for Snowbox"
+
+[[bin]]
+name = "snowbox-agent"
+path = "src/bin/snowbox-agent.rs"
+
+[[bin]]
+name = "snowbox-shell"
+path = "src/bin/snowbox-shell.rs"
+
+[dependencies]
+libc = "0.2"
+tar = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

@@ -12,11 +12,17 @@ export type Published = { port: number; host_port: number; url: string };
 
 export type Template = { name: string; shipped: boolean };
 
-export type PackageHit = {
+export type AgentOption = {
   name: string;
-  program: string;
+  type: string;
+  default: unknown;
   description: string;
-  unfree: boolean;
+};
+
+export type AgentProgram = {
+  name: string;
+  description: string;
+  options: AgentOption[];
 };
 
 export type WindowRec = {
@@ -106,18 +112,13 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ limits }),
     }),
-  addPackage: (id: string, add: string) =>
-    json<{ packages: string[] }>(`/api/v1/sandboxes/${id}/packages`, {
-      method: "POST",
-      body: JSON.stringify({ add }),
+  agentOptions: () => json<{ programs: AgentProgram[] }>("/api/v1/agent-options"),
+  environment: (id: string) => json<Record<string, unknown>>(`/api/v1/sandboxes/${id}/environment`),
+  saveEnvironment: (id: string, config: unknown) =>
+    json<Record<string, unknown>>(`/api/v1/sandboxes/${id}/environment`, {
+      method: "PUT",
+      body: JSON.stringify(config),
     }),
-  packages: (id: string) =>
-    json<{ packages: string[] }>(`/api/v1/sandboxes/${id}/packages`),
-  searchPackages: (q: string, unfree = false) => {
-    const p = new URLSearchParams({ q });
-    if (unfree) p.set("unfree", "true");
-    return json<{ packages: PackageHit[] }>(`/api/v1/packages?${p}`);
-  },
   copyIn: (id: string, from: string, replace: boolean) =>
     json<Sandbox>(`/api/v1/sandboxes/${id}/copy-in`, {
       method: "POST",

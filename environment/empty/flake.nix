@@ -1,22 +1,24 @@
 {
   description = "Snowbox Environment";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  inputs.home-manager.url = "github:nix-community/home-manager";
+  inputs.home-manager.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs =
-    { nixpkgs, ... }:
+    { nixpkgs, home-manager, ... }:
     let
       system = "aarch64-linux";
       pkgs = import nixpkgs {
         inherit system;
         config.allowUnfree = true;
       };
-      names = builtins.fromJSON (builtins.readFile ./packages.json);
+      hm = home-manager.lib.homeManagerConfiguration {
+        inherit pkgs;
+        modules = [ ./home.nix ];
+      };
     in
     {
-      packages.${system}.default = pkgs.buildEnv {
-        name = "environment";
-        paths = map (n: pkgs.${n}) names;
-      };
+      packages.${system}.default = hm.activationPackage;
     };
 }
