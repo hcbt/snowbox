@@ -21,7 +21,7 @@
           );
           image = nixos.config.system.build.images.sandbox;
         in
-        {
+        rec {
           inherit nixos;
           kernel = nixos.config.system.build.kernel;
           initrd = nixos.config.system.build.initialRamdisk;
