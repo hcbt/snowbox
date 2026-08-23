@@ -148,7 +148,11 @@
     checkPhase = ":";
     text = ''
       export PATH=/nix/var/nix/profiles/snowbox-environment/bin''${PATH:+:$PATH}
-      cd /workspace || cd /home/snow || true
+      if [ -d /workspace ]; then
+        cd /workspace
+      elif [ -d /home/snow ]; then
+        cd /home/snow
+      fi
       exec runuser -p -u snow -- ${pkgs.bash}/bin/bash -l
     '';
   };
