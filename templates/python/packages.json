@@ -1,1 +1,1 @@
-["bash","coreutils","python3"]
+["bash", "coreutils", "grok-build", "python3"]

@@ -82,6 +82,7 @@ mod tests {
         assert!(dir.path().join("environment/flake.lock").is_file());
         let pkgs = packages(dir.path()).unwrap();
         assert!(pkgs.contains(&"hello".to_string()));
+        assert!(pkgs.contains(&"grok-build".to_string()));
         let a = fingerprint(dir.path()).unwrap();
         let b = fingerprint(dir.path()).unwrap();
         assert_eq!(a, b);

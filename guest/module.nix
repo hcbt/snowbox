@@ -97,6 +97,10 @@
     "d /workspace 0755 snow snow -"
   ];
 
+  # Runtime Environment (Packages the user adds). PROFILE links it here;
+  # login shells must see it without a manual export.
+  environment.profiles = lib.mkBefore [ "/nix/var/nix/profiles/snowbox-environment" ];
+
   environment.defaultPackages = [ ];
   documentation.enable = false;
   documentation.doc.enable = false;
@@ -142,7 +146,10 @@
       pkgs.bash
     ];
     text = ''
-      exec runuser -u snow -- ${pkgs.bash}/bin/bash -l
+      exec runuser -u snow -- ${pkgs.bash}/bin/bash -lc \
+        'export PATH=/nix/var/nix/profiles/snowbox-environment/bin:$PATH
+         cd /workspace 2>/dev/null || cd
+         exec ${pkgs.bash}/bin/bash -i'
     '';
   };
 
@@ -175,11 +182,14 @@
           printf 'OK\n'
           ;;
         PROFILE)
-          mkdir -p /nix/var/nix/profiles /etc/profile.d /home/snow
+          mkdir -p /nix/var/nix/profiles /home/snow
           ln -sfn "$arg" /nix/var/nix/profiles/snowbox-environment
+          rm -rf /home/snow/.nix-profile
           ln -sfn "$arg" /home/snow/.nix-profile
-          printf "export PATH=/nix/var/nix/profiles/snowbox-environment/bin:\$PATH\n" >/etc/profile.d/snowbox-environment.sh
+          printf 'export PATH=/nix/var/nix/profiles/snowbox-environment/bin:$PATH\n' >/home/snow/.profile
+          printf 'export PATH=/nix/var/nix/profiles/snowbox-environment/bin:$PATH\n' >/home/snow/.bashrc
           chown -h snow:users /home/snow/.nix-profile 2>/dev/null || true
+          chown snow:users /home/snow/.profile /home/snow/.bashrc 2>/dev/null || true
           printf 'OK\n'
           ;;
         CONNECT)

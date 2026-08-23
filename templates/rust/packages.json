@@ -1,1 +1,1 @@
-["bash","coreutils","rustc","cargo","gcc"]
+["bash", "coreutils", "cargo", "gcc", "grok-build", "rustc"]
