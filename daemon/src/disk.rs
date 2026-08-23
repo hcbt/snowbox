@@ -80,6 +80,10 @@ fn ensure_runtime_template(src: &Path, template: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn clone_file(src: &Path, dst: &Path) -> Result<(), String> {
+    clone_or_copy(src, dst)
+}
+
 fn clone_or_copy(src: &Path, dst: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {

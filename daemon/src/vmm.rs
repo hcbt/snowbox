@@ -8,6 +8,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::disk;
+use crate::environment;
 use crate::runtime::Runtime;
 use crate::sandbox::Limits;
 
@@ -67,6 +68,9 @@ impl Hypervisor {
 
     pub fn start(&self, id: Uuid, sandbox_dir: &Path, limits: Limits) -> Result<StartKind, String> {
         let own_save = sandbox_dir.join(SAVE_NAME);
+        if !own_save.exists() {
+            install_ready(sandbox_dir);
+        }
         let mac_id = disk::read_mac_id(sandbox_dir, id);
         disk::prepare_root_disk(sandbox_dir, &self.runtime.rootfs, limits.disk)?;
         if own_save.exists() {
@@ -81,6 +85,9 @@ impl Hypervisor {
                 Err(e) => {
                     eprintln!("sandbox {id}: restore failed ({e}); booting");
                     let _ = std::fs::remove_file(&own_save);
+                    // Drop the snapshot identifier so a concurrent guest
+                    // already using it does not collide on cold boot.
+                    let _ = std::fs::remove_file(sandbox_dir.join("machine.ident"));
                     let _ = self.engine.stop(id);
                 }
             }
@@ -104,7 +111,9 @@ impl Hypervisor {
             let _ = std::fs::remove_file(save);
             return Err(e);
         }
-        self.engine.stop(id)
+        self.engine.stop(id)?;
+        bake_ready(save.parent().unwrap_or(Path::new("")));
+        Ok(())
     }
 
     pub fn stop(&self, id: Uuid) -> Result<(), String> {
@@ -158,6 +167,102 @@ pub fn pump_main_run_loop() {
     crate::vz::pump_main_run_loop();
     #[cfg(not(target_os = "macos"))]
     std::thread::park();
+}
+
+fn ready_key(fp: &str) -> String {
+    let mut h = 2166136261u64;
+    for b in fp.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(16777619);
+    }
+    format!("{h:016x}")
+}
+
+fn ready_dir(sandbox_dir: &Path, fp: &str) -> PathBuf {
+    sandbox_dir
+        .parent()
+        .unwrap_or(sandbox_dir)
+        .join(".ready")
+        .join(ready_key(fp))
+}
+
+fn install_ready(sandbox_dir: &Path) {
+    let Ok(fp) = environment::fingerprint(sandbox_dir) else {
+        return;
+    };
+    let ready = ready_dir(sandbox_dir, &fp);
+    let src_save = ready.join(SAVE_NAME);
+    let src_disk = ready.join("root.raw");
+    let src_ident = ready.join("machine.ident");
+    if !(src_save.is_file() && src_disk.is_file() && src_ident.is_file()) {
+        return;
+    }
+    let disk_dir = sandbox_dir.join("disk");
+    let dst_disk = disk_dir.join("root.raw");
+    if let Err(e) = std::fs::create_dir_all(&disk_dir) {
+        eprintln!("ready snapshot: mkdir disk: {e}");
+        return;
+    }
+    if !dst_disk.exists() {
+        if let Err(e) = disk::clone_file(&src_disk, &dst_disk) {
+            eprintln!("ready snapshot: clone disk: {e}");
+            return;
+        }
+    }
+    for name in [SAVE_NAME, "machine.ident", "mac.id", "environment.applied"] {
+        let src = ready.join(name);
+        if src.is_file() {
+            let _ = std::fs::copy(&src, sandbox_dir.join(name));
+        }
+    }
+}
+
+fn bake_ready(sandbox_dir: &Path) {
+    let src_save = sandbox_dir.join(SAVE_NAME);
+    let src_disk = sandbox_dir.join("disk").join("root.raw");
+    let src_ident = sandbox_dir.join("machine.ident");
+    if !(src_save.is_file() && src_disk.is_file() && src_ident.is_file()) {
+        return;
+    }
+    let Ok(fp) = environment::fingerprint(sandbox_dir) else {
+        return;
+    };
+    let dest = ready_dir(sandbox_dir, &fp);
+    if dest.join(SAVE_NAME).is_file() {
+        return;
+    }
+    let tmp = dest.with_extension("tmp");
+    let _ = std::fs::remove_dir_all(&tmp);
+    if let Err(e) = std::fs::create_dir_all(&tmp) {
+        eprintln!("ready snapshot: mkdir: {e}");
+        return;
+    }
+    if let Err(e) = disk::clone_file(&src_disk, &tmp.join("root.raw")) {
+        eprintln!("ready snapshot: clone disk: {e}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    for (src, name) in [
+        (src_save.as_path(), SAVE_NAME),
+        (src_ident.as_path(), "machine.ident"),
+        (sandbox_dir.join("mac.id").as_path(), "mac.id"),
+        (
+            sandbox_dir.join("environment.applied").as_path(),
+            "environment.applied",
+        ),
+    ] {
+        if src.is_file() {
+            let _ = std::fs::copy(src, tmp.join(name));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dest);
+    if let Some(parent) = dest.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::rename(&tmp, &dest) {
+        eprintln!("ready snapshot: install: {e}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
 
 #[cfg(test)]
@@ -357,5 +462,48 @@ mod tests {
         assert!(hv.save_and_stop(id, &save).is_err());
         assert_eq!(*fake.stops.lock().unwrap(), vec![id]);
         assert!(!save.exists());
+    }
+
+    #[test]
+    fn start_restores_a_new_sandbox_from_a_ready_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(dir.path());
+        let fake = Fake::new();
+        let hv = Hypervisor::wrap(rt, fake.clone());
+        let a = dir.path().join("a");
+        crate::environment::write_default(&a).unwrap();
+        std::fs::create_dir_all(a.join("disk")).unwrap();
+        std::fs::write(a.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
+        std::fs::write(a.join(SAVE_NAME), b"save").unwrap();
+        std::fs::write(a.join("machine.ident"), b"ident").unwrap();
+        std::fs::write(a.join("environment.applied"), b"stamp").unwrap();
+        bake_ready(&a);
+
+        let b = dir.path().join("b");
+        crate::environment::write_default(&b).unwrap();
+        let id = Uuid::from_u128(6);
+        assert_eq!(hv.start(id, &b, limits()).unwrap(), StartKind::Restored);
+        assert_eq!(*fake.restores.lock().unwrap(), vec![id]);
+        assert!(fake.boots.lock().unwrap().is_empty());
+        assert!(b.join(SAVE_NAME).is_file());
+        assert!(b.join("disk").join("root.raw").is_file());
+    }
+
+    #[test]
+    fn save_and_stop_bakes_a_ready_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(dir.path());
+        let fake = Fake::new();
+        let hv = Hypervisor::wrap(rt, fake.clone());
+        let sb = dir.path().join("sb");
+        crate::environment::write_default(&sb).unwrap();
+        std::fs::create_dir_all(sb.join("disk")).unwrap();
+        std::fs::write(sb.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
+        std::fs::write(sb.join("machine.ident"), b"ident").unwrap();
+        let save = sb.join(SAVE_NAME);
+        std::fs::write(&save, b"save").unwrap();
+        hv.save_and_stop(Uuid::from_u128(7), &save).unwrap();
+        let fp = crate::environment::fingerprint(&sb).unwrap();
+        assert!(ready_dir(&sb, &fp).join(SAVE_NAME).is_file());
     }
 }
