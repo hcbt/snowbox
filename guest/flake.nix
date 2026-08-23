@@ -1,7 +1,7 @@
 {
-  description = "Snowbox sandbox runtime (NixOS 26.05)";
+  description = "Snowbox sandbox runtime";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
   outputs =
     { nixpkgs, ... }:
@@ -15,7 +15,7 @@
             modules = [ ./module.nix ];
           };
           pkgs = nixos.pkgs;
-          kernelFile = pkgs.stdenv.hostPlatform.linux-kernel.target;
+          kernelFile = nixos.config.system.boot.loader.kernelFile;
           cmdline = lib.concatStringsSep " " (
             [ "init=${nixos.config.system.build.toplevel}/init" ] ++ nixos.config.boot.kernelParams
           );

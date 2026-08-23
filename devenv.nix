@@ -44,7 +44,7 @@ in
 
   scripts.canvas.exec = "cd canvas && bun install && bun run build";
 
-  # Guest runtime is NixOS 26.05. Darwin builds aarch64-linux through
+  # Guest runtime tracks nixpkgs-unstable. Darwin builds aarch64-linux through
   # linux-builder; Linux builds the host architecture. The Daemon looks
   # at guest/result or SNOWBOX_RUNTIME.
   scripts.guest.exec = "nix build path:./guest#packages.${guestSystem}.runtime --out-link guest/result";

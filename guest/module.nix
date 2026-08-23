@@ -1,6 +1,6 @@
-# Sandbox runtime. NixOS 26.05: systemd stage 1 (the default), image.repart
-# for the root disk, kernel loaded by the Host hypervisor — no guest
-# bootloader. Do not import the qemu-guest profile: it pulls 9p/virtiofs.
+# Sandbox runtime. systemd stage 1 (the default), image.repart for the
+# root disk, kernel loaded by the Host hypervisor — no guest bootloader.
+# Do not import the qemu-guest profile: it pulls 9p/virtiofs.
 {
   config,
   lib,
