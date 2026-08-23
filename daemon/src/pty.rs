@@ -85,6 +85,7 @@ async fn pump(
     window: Uuid,
     sandbox: Uuid,
 ) {
+    let vmm_stty = vmm.clone();
     let live = match attach(&sessions, vmm, window, sandbox).await {
         Ok(live) => live,
         Err(e) => {
@@ -113,7 +114,21 @@ async fn pump(
                         if live.inn.send(b.to_vec()).await.is_err() { break; }
                     }
                     Some(Ok(Message::Text(t))) => {
-                        if live.inn.send(t.as_bytes().to_vec()).await.is_err() { break; }
+                        if let Some(rest) = t.strip_prefix("resize ") {
+                            let mut sp = rest.split_whitespace();
+                            if let (Some(cols), Some(rows)) = (sp.next(), sp.next()) {
+                                if let (Ok(cols), Ok(rows)) = (cols.parse::<u16>(), rows.parse::<u16>()) {
+                                    if cols > 0 && rows > 0 {
+                                        let v = vmm_stty.clone();
+                                        tokio::task::spawn_blocking(move || {
+                                            let _ = crate::agent::winsize(&*v, sandbox, cols, rows);
+                                        });
+                                    }
+                                }
+                            }
+                        } else if live.inn.send(t.as_bytes().to_vec()).await.is_err() {
+                            break;
+                        }
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(_)) => {}

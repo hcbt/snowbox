@@ -97,9 +97,11 @@
     "d /workspace 0755 snow snow -"
   ];
 
-  # Runtime Environment (Packages the user adds). PROFILE links it here;
-  # login shells must see it without a manual export.
+  # Same as a NixOS machine: PATH comes from environment.profiles, not
+  # from writing ~/.bashrc. PROFILE only installs the profile symlink.
   environment.profiles = lib.mkBefore [ "/nix/var/nix/profiles/snowbox-environment" ];
+  environment.sessionVariables.TERM = "xterm-256color";
+  environment.sessionVariables.COLORTERM = "truecolor";
 
   environment.defaultPackages = [ ];
   documentation.enable = false;
@@ -147,13 +149,9 @@
     ];
     checkPhase = ":";
     text = ''
-      export PATH=/nix/var/nix/profiles/snowbox-environment/bin''${PATH:+:$PATH}
-      if [ -d /workspace ]; then
-        cd /workspace
-      elif [ -d /home/snow ]; then
-        cd /home/snow
-      fi
-      exec runuser -p -u snow -- ${pkgs.bash}/bin/bash -l
+      # socat's pty starts at 0x0; TUIs (grok) draw nothing until winsize is set.
+      stty rows 24 cols 80 || true
+      exec runuser -u snow -- ${pkgs.bash}/bin/bash -l
     '';
   };
 
@@ -164,6 +162,7 @@
       pkgs.gnutar
       pkgs.gzip
       pkgs.nix
+      pkgs.util-linux
     ];
     checkPhase = ":";
     text = ''
@@ -187,14 +186,18 @@
           printf 'OK\n'
           ;;
         PROFILE)
-          mkdir -p /nix/var/nix/profiles /home/snow
+          mkdir -p /nix/var/nix/profiles
           ln -sfn "$arg" /nix/var/nix/profiles/snowbox-environment
-          rm -rf /home/snow/.nix-profile
-          ln -sfn "$arg" /home/snow/.nix-profile
-          printf 'export PATH=/nix/var/nix/profiles/snowbox-environment/bin:$PATH\n' >/home/snow/.profile
-          printf 'export PATH=/nix/var/nix/profiles/snowbox-environment/bin:$PATH\n' >/home/snow/.bashrc
-          chown -h snow:users /home/snow/.nix-profile 2>/dev/null || true
-          chown snow:users /home/snow/.profile /home/snow/.bashrc 2>/dev/null || true
+          printf 'OK\n'
+          ;;
+        STTY)
+          rows=''${arg%%x*}
+          cols=''${arg##*x}
+          for t in /dev/pts/*; do
+            [ -c "$t" ] || continue
+            [ "$t" = /dev/pts/ptmx ] && continue
+            stty rows "$rows" cols "$cols" <"$t" || true
+          done
           printf 'OK\n'
           ;;
         CONNECT)

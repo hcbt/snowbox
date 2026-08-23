@@ -272,7 +272,7 @@ export function App() {
                   <span class="absolute right-[2px] bottom-[3px] left-[2px] h-0.5 bg-white" />
                 </button>
               </div>
-              <div class="relative min-h-0 flex-1 border-x-2 border-b-2 border-twm bg-white">
+              <div class="relative min-h-0 flex-1 border-x-2 border-b-2 border-twm bg-black">
                 <Term
                   windowId={w().id}
                   active={focus() === w().id}

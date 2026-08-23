@@ -69,7 +69,7 @@ impl Hypervisor {
     pub fn start(&self, id: Uuid, sandbox_dir: &Path, limits: Limits) -> Result<StartKind, String> {
         let own_save = sandbox_dir.join(SAVE_NAME);
         if !own_save.exists() {
-            install_ready(sandbox_dir);
+            install_ready(sandbox_dir, &self.runtime.rootfs);
         }
         let mac_id = disk::read_mac_id(sandbox_dir, id);
         disk::prepare_root_disk(sandbox_dir, &self.runtime.rootfs, limits.disk)?;
@@ -112,7 +112,7 @@ impl Hypervisor {
             return Err(e);
         }
         self.engine.stop(id)?;
-        bake_ready(save.parent().unwrap_or(Path::new("")));
+        bake_ready(save.parent().unwrap_or(Path::new("")), &self.runtime.rootfs);
         Ok(())
     }
 
@@ -169,28 +169,30 @@ pub fn pump_main_run_loop() {
     std::thread::park();
 }
 
-fn ready_key(fp: &str) -> String {
+fn ready_key(fp: &str, runtime: &Path) -> String {
     let mut h = 2166136261u64;
-    for b in fp.as_bytes() {
-        h ^= u64::from(*b);
-        h = h.wrapping_mul(16777619);
+    for part in [fp.as_bytes(), runtime.as_os_str().as_encoded_bytes()] {
+        for b in part {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(16777619);
+        }
     }
     format!("{h:016x}")
 }
 
-fn ready_dir(sandbox_dir: &Path, fp: &str) -> PathBuf {
+fn ready_dir(sandbox_dir: &Path, fp: &str, runtime: &Path) -> PathBuf {
     sandbox_dir
         .parent()
         .unwrap_or(sandbox_dir)
         .join(".ready")
-        .join(ready_key(fp))
+        .join(ready_key(fp, runtime))
 }
 
-fn install_ready(sandbox_dir: &Path) {
+fn install_ready(sandbox_dir: &Path, runtime: &Path) {
     let Ok(fp) = environment::fingerprint(sandbox_dir) else {
         return;
     };
-    let ready = ready_dir(sandbox_dir, &fp);
+    let ready = ready_dir(sandbox_dir, &fp, runtime);
     let src_save = ready.join(SAVE_NAME);
     let src_disk = ready.join("root.raw");
     let src_ident = ready.join("machine.ident");
@@ -217,7 +219,7 @@ fn install_ready(sandbox_dir: &Path) {
     }
 }
 
-fn bake_ready(sandbox_dir: &Path) {
+fn bake_ready(sandbox_dir: &Path, runtime: &Path) {
     let src_save = sandbox_dir.join(SAVE_NAME);
     let src_disk = sandbox_dir.join("disk").join("root.raw");
     let src_ident = sandbox_dir.join("machine.ident");
@@ -227,7 +229,7 @@ fn bake_ready(sandbox_dir: &Path) {
     let Ok(fp) = environment::fingerprint(sandbox_dir) else {
         return;
     };
-    let dest = ready_dir(sandbox_dir, &fp);
+    let dest = ready_dir(sandbox_dir, &fp, runtime);
     if dest.join(SAVE_NAME).is_file() {
         return;
     }
@@ -469,7 +471,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let rt = runtime(dir.path());
         let fake = Fake::new();
-        let hv = Hypervisor::wrap(rt, fake.clone());
+        let hv = Hypervisor::wrap(rt.clone(), fake.clone());
         let a = dir.path().join("a");
         crate::environment::write_default(&a).unwrap();
         std::fs::create_dir_all(a.join("disk")).unwrap();
@@ -477,7 +479,7 @@ mod tests {
         std::fs::write(a.join(SAVE_NAME), b"save").unwrap();
         std::fs::write(a.join("machine.ident"), b"ident").unwrap();
         std::fs::write(a.join("environment.applied"), b"stamp").unwrap();
-        bake_ready(&a);
+        bake_ready(&a, &rt.rootfs);
 
         let b = dir.path().join("b");
         crate::environment::write_default(&b).unwrap();
@@ -494,7 +496,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let rt = runtime(dir.path());
         let fake = Fake::new();
-        let hv = Hypervisor::wrap(rt, fake.clone());
+        let hv = Hypervisor::wrap(rt.clone(), fake.clone());
         let sb = dir.path().join("sb");
         crate::environment::write_default(&sb).unwrap();
         std::fs::create_dir_all(sb.join("disk")).unwrap();
@@ -504,6 +506,38 @@ mod tests {
         std::fs::write(&save, b"save").unwrap();
         hv.save_and_stop(Uuid::from_u128(7), &save).unwrap();
         let fp = crate::environment::fingerprint(&sb).unwrap();
-        assert!(ready_dir(&sb, &fp).join(SAVE_NAME).is_file());
+        assert!(ready_dir(&sb, &fp, &rt.rootfs).join(SAVE_NAME).is_file());
+    }
+
+    #[test]
+    fn ready_snapshot_does_not_apply_across_runtimes() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(dir.path());
+        let other = dir.path().join("other.raw");
+        std::fs::write(&other, vec![0u8; 64]).unwrap();
+        let a = dir.path().join("a");
+        crate::environment::write_default(&a).unwrap();
+        std::fs::create_dir_all(a.join("disk")).unwrap();
+        std::fs::write(a.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
+        std::fs::write(a.join(SAVE_NAME), b"save").unwrap();
+        std::fs::write(a.join("machine.ident"), b"ident").unwrap();
+        bake_ready(&a, &rt.rootfs);
+
+        let fake = Fake::new();
+        let hv = Hypervisor::wrap(
+            Runtime {
+                kernel: rt.kernel.clone(),
+                initrd: rt.initrd.clone(),
+                rootfs: other,
+                cmdline: rt.cmdline.clone(),
+            },
+            fake.clone(),
+        );
+        let b = dir.path().join("b");
+        crate::environment::write_default(&b).unwrap();
+        let id = Uuid::from_u128(8);
+        assert_eq!(hv.start(id, &b, limits()).unwrap(), StartKind::Cold);
+        assert!(fake.restores.lock().unwrap().is_empty());
+        assert_eq!(*fake.boots.lock().unwrap(), vec![id]);
     }
 }

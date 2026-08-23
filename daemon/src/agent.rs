@@ -139,6 +139,26 @@ pub fn profile(vmm: &impl Control, id: Uuid, store_path: &str) -> Result<(), Str
     }
 }
 
+pub fn winsize(vmm: &impl Control, id: Uuid, cols: u16, rows: u16) -> Result<(), String> {
+    let mut stream = vmm.vsock(id, AGENT_PORT)?;
+    let header = format!("STTY {rows}x{cols}\n");
+    stream
+        .write_all(header.as_bytes())
+        .map_err(|e| format!("stty write: {e}"))?;
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .map_err(|e| format!("stty shutdown: {e}"))?;
+    let mut reply = String::new();
+    stream
+        .read_to_string(&mut reply)
+        .map_err(|e| format!("stty reply: {e}"))?;
+    if reply.contains("OK") {
+        Ok(())
+    } else {
+        Err(format!("stty: {reply}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +184,18 @@ mod tests {
             b.write_all(b"PONG\n").unwrap();
         });
         ping(&Pair(a), Uuid::nil()).unwrap();
+    }
+
+    #[test]
+    fn winsize_sends_stty_rows_x_cols() {
+        let (a, b) = UnixStream::pair().unwrap();
+        thread::spawn(move || {
+            let mut b = b;
+            let mut buf = [0u8; 32];
+            let n = b.read(&mut buf).unwrap();
+            assert_eq!(&buf[..n], b"STTY 24x80\n");
+            b.write_all(b"OK\n").unwrap();
+        });
+        winsize(&Pair(a), Uuid::nil(), 80, 24).unwrap();
     }
 }
