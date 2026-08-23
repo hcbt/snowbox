@@ -51,5 +51,5 @@ export function Term(props: { windowId: string }) {
     };
   });
 
-  return <div ref={host} class="h-full w-full bg-white p-0.5" />;
+  return <div ref={host} class="h-full w-full bg-white" />;
 }

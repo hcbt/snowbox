@@ -162,7 +162,7 @@ export function App() {
 
   return (
     <div
-      class="relative h-full w-full bg-black"
+      class="relative h-full w-full bg-x11"
       onContextMenu={(e) => {
         e.preventDefault();
         setMenu({ x: e.clientX, y: e.clientY });
@@ -171,7 +171,7 @@ export function App() {
     >
       <Show when={layout().icon_manager.visible}>
         <div
-          class="absolute min-w-40 border-2 border-twm bg-twm"
+          class="absolute min-w-40 bg-twm"
           style={{
             left: `${layout().icon_manager.x}px`,
             top: `${layout().icon_manager.y}px`,
@@ -185,21 +185,23 @@ export function App() {
             <span class="size-3 shrink-0 border border-white bg-twm-hi" />
             <span class="flex-1">Icon Manager</span>
           </div>
-          <For each={layout().windows}>
-            {(w) => (
-              <button
-                type="button"
-                class="block w-full border-t border-twm-line px-2 py-0.5 text-left font-bold text-white hover:bg-twm-hi"
-                classList={{ "bg-twm-hi": focus() === w.id }}
-                onClick={() => {
-                  patchWin(w.id, { iconified: false }, true);
-                  raise(w.id);
-                }}
-              >
-                {w.title}
-              </button>
-            )}
-          </For>
+          <div class="border-x-2 border-b-2 border-twm">
+            <For each={layout().windows}>
+              {(w) => (
+                <button
+                  type="button"
+                  class="block w-full border-0 border-t border-twm-line bg-twm px-2 py-0.5 text-left font-bold text-white hover:bg-twm-hi"
+                  classList={{ "bg-twm-hi": focus() === w.id }}
+                  onClick={() => {
+                    patchWin(w.id, { iconified: false }, true);
+                    raise(w.id);
+                  }}
+                >
+                  {w.title}
+                </button>
+              )}
+            </For>
+          </div>
         </div>
       </Show>
 
@@ -207,7 +209,7 @@ export function App() {
         {(w) => (
           <Show when={!w.iconified}>
             <div
-              class="absolute box-border flex min-h-20 min-w-[180px] flex-col border-2 border-twm bg-twm"
+              class="absolute flex min-h-20 min-w-[180px] flex-col"
               style={{
                 left: `${w.x}px`,
                 top: `${w.y}px`,
@@ -218,7 +220,7 @@ export function App() {
               onMouseDown={() => raise(w.id)}
             >
               <div
-                class="flex h-5 cursor-grab items-center gap-1.5 bg-twm px-[3px] text-[13px] font-bold text-white active:cursor-grabbing"
+                class="flex h-5 shrink-0 cursor-grab items-center gap-1.5 bg-twm px-[3px] text-[13px] font-bold text-white active:cursor-grabbing"
                 onMouseDown={(e) => drag(e, "move", w.id)}
               >
                 <span class="relative size-3 shrink-0 border border-white bg-twm-hi">
@@ -239,7 +241,7 @@ export function App() {
                   <span class="absolute right-0.5 bottom-[3px] left-0.5 h-0.5 bg-white" />
                 </button>
               </div>
-              <div class="relative min-h-0 flex-1 bg-white">
+              <div class="relative min-h-0 flex-1 border-x-2 border-b-2 border-twm bg-white">
                 <Term windowId={w.id} />
                 <div
                   class="absolute right-0 bottom-0 size-3 cursor-se-resize"
@@ -326,7 +328,7 @@ export function App() {
       </Show>
 
       <div
-        class="pointer-events-none fixed bottom-2 left-2 font-mono text-xs text-twm-hi"
+        class="pointer-events-none fixed bottom-2 left-2 font-mono text-xs text-black"
         classList={{ "text-white": busy() }}
       >
         {busy() ? "working…" : status()}
@@ -493,7 +495,7 @@ function OverlayDialog(props: {
 
   return (
     <div
-      class="absolute top-16 left-1/2 z-[99999] min-w-80 -translate-x-1/2 border-2 border-twm bg-white text-black"
+      class="absolute top-16 left-1/2 z-[99999] min-w-80 -translate-x-1/2 text-black"
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div class="flex h-5 items-center gap-1.5 bg-twm px-[3px] text-[13px] font-bold text-white">
@@ -504,7 +506,7 @@ function OverlayDialog(props: {
         </button>
       </div>
       <form
-        class="px-3.5 py-3 font-twm"
+        class="border-x-2 border-b-2 border-twm bg-white px-3.5 py-3 font-twm"
         onSubmit={(e) => {
           e.preventDefault();
           submit();

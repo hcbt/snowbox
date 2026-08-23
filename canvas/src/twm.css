@@ -8,16 +8,27 @@
   --color-twm-head: #cfcfcf;
   --color-twm-line: #7a1e44;
   --color-twm-muted: #e7a0bb;
+  --color-x11: #bebebe;
   --font-twm: Helvetica, Arial, "Lucida Grande", sans-serif;
 }
 
 @layer base {
+  *,
+  *::before,
+  *::after {
+    @apply box-border;
+  }
+
   html,
   body,
   #root {
-    @apply m-0 h-full overflow-hidden bg-black font-twm text-[13px] text-white;
+    @apply m-0 h-full overflow-hidden bg-x11 font-twm text-[13px] text-black;
     font-smooth: never;
     -webkit-font-smoothing: none;
     user-select: none;
+  }
+
+  button {
+    @apply appearance-none;
   }
 }
