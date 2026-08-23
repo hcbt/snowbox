@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
-use crate::vz::{self, Hypervisor};
+use crate::vmm::{AGENT_PORT, Control};
 
-pub fn wait_ready(vmm: &Hypervisor, id: Uuid, timeout: Duration) -> Result<(), String> {
+pub fn wait_ready(vmm: &impl Control, id: Uuid, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     let mut last = "not tried".to_string();
     while Instant::now() < deadline {
@@ -21,8 +21,8 @@ pub fn wait_ready(vmm: &Hypervisor, id: Uuid, timeout: Duration) -> Result<(), S
     Err(format!("agent not ready: {last}"))
 }
 
-pub fn ping(vmm: &Hypervisor, id: Uuid) -> Result<(), String> {
-    let mut stream = vmm.vsock(id, vz::AGENT_PORT)?;
+pub fn ping(vmm: &impl Control, id: Uuid) -> Result<(), String> {
+    let mut stream = vmm.vsock(id, AGENT_PORT)?;
     stream
         .write_all(b"PING\n")
         .map_err(|e| format!("ping write: {e}"))?;
@@ -38,7 +38,7 @@ pub fn ping(vmm: &Hypervisor, id: Uuid) -> Result<(), String> {
     }
 }
 
-pub fn tar_in(vmm: &Hypervisor, id: Uuid, dest: &str, from: &Path) -> Result<(), String> {
+pub fn tar_in(vmm: &impl Control, id: Uuid, dest: &str, from: &Path) -> Result<(), String> {
     if !from.exists() {
         return Ok(());
     }
@@ -57,7 +57,7 @@ pub fn tar_in(vmm: &Hypervisor, id: Uuid, dest: &str, from: &Path) -> Result<(),
             .map_err(|e| format!("tar: {e}"))?;
         builder.finish().map_err(|e| format!("tar finish: {e}"))?;
     }
-    let mut stream = vmm.vsock(id, vz::AGENT_PORT)?;
+    let mut stream = vmm.vsock(id, AGENT_PORT)?;
     let header = format!("TAR_IN {dest}\n");
     stream
         .write_all(header.as_bytes())
@@ -79,8 +79,8 @@ pub fn tar_in(vmm: &Hypervisor, id: Uuid, dest: &str, from: &Path) -> Result<(),
     }
 }
 
-pub fn tar_out(vmm: &Hypervisor, id: Uuid, src: &str, to: &Path) -> Result<(), String> {
-    let mut stream = vmm.vsock(id, vz::AGENT_PORT)?;
+pub fn tar_out(vmm: &impl Control, id: Uuid, src: &str, to: &Path) -> Result<(), String> {
+    let mut stream = vmm.vsock(id, AGENT_PORT)?;
     let header = format!("TAR_OUT {src}\n");
     stream
         .write_all(header.as_bytes())
@@ -97,8 +97,8 @@ pub fn tar_out(vmm: &Hypervisor, id: Uuid, src: &str, to: &Path) -> Result<(), S
     Ok(())
 }
 
-pub fn nar_in(vmm: &Hypervisor, id: Uuid, export: &[u8]) -> Result<(), String> {
-    let mut stream = vmm.vsock(id, vz::AGENT_PORT)?;
+pub fn nar_in(vmm: &impl Control, id: Uuid, export: &[u8]) -> Result<(), String> {
+    let mut stream = vmm.vsock(id, AGENT_PORT)?;
     stream
         .write_all(b"NAR_IN\n")
         .map_err(|e| format!("nar_in header: {e}"))?;
@@ -119,8 +119,8 @@ pub fn nar_in(vmm: &Hypervisor, id: Uuid, export: &[u8]) -> Result<(), String> {
     }
 }
 
-pub fn profile(vmm: &Hypervisor, id: Uuid, store_path: &str) -> Result<(), String> {
-    let mut stream = vmm.vsock(id, vz::AGENT_PORT)?;
+pub fn profile(vmm: &impl Control, id: Uuid, store_path: &str) -> Result<(), String> {
+    let mut stream = vmm.vsock(id, AGENT_PORT)?;
     let header = format!("PROFILE {store_path}\n");
     stream
         .write_all(header.as_bytes())
@@ -136,5 +136,33 @@ pub fn profile(vmm: &Hypervisor, id: Uuid, store_path: &str) -> Result<(), Strin
         Ok(())
     } else {
         Err(format!("profile: {reply}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixStream;
+    use std::thread;
+
+    struct Pair(UnixStream);
+
+    impl Control for Pair {
+        fn vsock(&self, _id: Uuid, _port: u32) -> Result<UnixStream, String> {
+            self.0.try_clone().map_err(|e| e.to_string())
+        }
+    }
+
+    #[test]
+    fn ping_reads_pong_through_control() {
+        let (a, b) = UnixStream::pair().unwrap();
+        thread::spawn(move || {
+            let mut b = b;
+            let mut buf = [0u8; 16];
+            let n = b.read(&mut buf).unwrap();
+            assert!(std::str::from_utf8(&buf[..n]).unwrap().starts_with("PING"));
+            b.write_all(b"PONG\n").unwrap();
+        });
+        ping(&Pair(a), Uuid::nil()).unwrap();
     }
 }

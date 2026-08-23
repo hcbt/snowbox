@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::api::AppState;
 use crate::sandbox::{ActionError, State as SandboxState};
-use crate::vz;
+use crate::vmm::{Control, Hypervisor, SHELL_PORT};
 
 pub async fn upgrade(
     ws: WebSocketUpgrade,
@@ -37,8 +37,9 @@ pub async fn upgrade(
     Ok(ws.on_upgrade(move |socket| pump(socket, vmm, win.sandbox)))
 }
 
-async fn pump(mut socket: WebSocket, vmm: Arc<vz::Hypervisor>, sandbox: Uuid) {
-    let connected = tokio::task::spawn_blocking(move || vmm.vsock(sandbox, vz::SHELL_PORT)).await;
+async fn pump(mut socket: WebSocket, vmm: Arc<Hypervisor>, sandbox: Uuid) {
+    let connected =
+        tokio::task::spawn_blocking(move || Control::vsock(&*vmm, sandbox, SHELL_PORT)).await;
     let stream = match connected {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {

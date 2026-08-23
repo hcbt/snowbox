@@ -1,27 +1,10 @@
 //! Virtualization.framework, in-process, macOS only.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use uuid::Uuid;
 
 use crate::runtime::Runtime;
 use crate::sandbox::Limits;
-
-pub const AGENT_PORT: u32 = 52;
-pub const SHELL_PORT: u32 = 53;
-pub const SAVE_NAME: &str = "machine.vzvmsave";
-
-/// Baked ready guest. New Sandboxes clone its disk and restore its
-/// machine state. Each still gets its own NAT; they do not share a network.
-#[allow(dead_code)]
-pub const TEMPLATE_ID: Uuid = Uuid::from_bytes([
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-]);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StartKind {
-    Cold,
-    Restored,
-}
 
 /// Locally administered unicast MAC derived from the Sandbox id so
 /// concurrent guests do not share an ethernet address.
@@ -41,215 +24,54 @@ pub fn is_supported() -> bool {
     unsafe { VZVirtualMachine::isSupported() }
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn is_supported() -> bool {
-    false
-}
-
 #[cfg(target_os = "macos")]
 pub fn pump_main_run_loop() {
     objc2_foundation::NSRunLoop::mainRunLoop().run();
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn pump_main_run_loop() {
-    std::thread::park();
-}
-
-pub struct Hypervisor {
-    runtime: Runtime,
-    #[allow(dead_code)]
-    data: PathBuf,
-}
-
-impl Hypervisor {
-    pub fn new(runtime: Runtime, data: PathBuf) -> Self {
-        Self { runtime, data }
-    }
-
-    #[allow(dead_code)]
-    pub fn template_dir(&self) -> PathBuf {
-        self.data.join("template")
-    }
-
-    #[allow(dead_code)]
-    pub fn template_ready(&self) -> bool {
-        let dir = self.template_dir();
-        dir.join(SAVE_NAME).is_file()
-            && dir.join("disk").join("root.raw").is_file()
-            && runtime_key_matches(&dir, &self.runtime.rootfs)
-    }
-
-    pub fn start(&self, id: Uuid, sandbox_dir: &Path, limits: Limits) -> Result<StartKind, String> {
-        let own_save = sandbox_dir.join(SAVE_NAME);
-        let mac_id = read_mac_id(sandbox_dir, id);
-        // VF restore is tied to the disk file that was saved. A cloned
-        // disk is a new argument and fails restore; new Sandboxes boot.
-        prepare_disk(sandbox_dir, &self.runtime.rootfs, None, limits.disk)?;
-        if own_save.exists() {
-            match restore_vm(&self.runtime, id, sandbox_dir, limits, mac_id, &own_save) {
-                Ok(()) => {
-                    write_mac_id(sandbox_dir, mac_id);
-                    return Ok(StartKind::Restored);
-                }
-                Err(e) => {
-                    eprintln!("sandbox {id}: restore failed ({e}); booting");
-                    let _ = std::fs::remove_file(&own_save);
-                    let _ = stop_vm(id);
-                }
-            }
-        }
-        write_mac_id(sandbox_dir, id);
-        start_vm(&self.runtime, id, sandbox_dir, limits, id)?;
-        Ok(StartKind::Cold)
-    }
-
-    pub fn start_cold(&self, id: Uuid, sandbox_dir: &Path, limits: Limits) -> Result<(), String> {
-        prepare_disk(sandbox_dir, &self.runtime.rootfs, None, limits.disk)?;
-        write_mac_id(sandbox_dir, id);
-        start_vm(&self.runtime, id, sandbox_dir, limits, id)
-    }
-
-    pub fn save_and_stop(&self, id: Uuid, save: &Path) -> Result<(), String> {
-        pause_vm(id)?;
-        if let Err(e) = save_vm(id, save) {
-            let _ = stop_vm(id);
-            let _ = std::fs::remove_file(save);
-            return Err(e);
-        }
-        stop_vm(id)
-    }
-
-    pub fn stop(&self, id: Uuid) -> Result<(), String> {
-        stop_vm(id)
-    }
-
-    pub fn vsock(&self, id: Uuid, port: u32) -> Result<std::os::unix::net::UnixStream, String> {
-        vsock_connect(id, port)
-    }
-}
-
-#[allow(dead_code)]
-pub fn prepare_root_disk(
-    sandbox_dir: &Path,
-    runtime_rootfs: &Path,
-    disk: u64,
-) -> Result<PathBuf, String> {
-    prepare_disk(sandbox_dir, runtime_rootfs, None, disk)
-}
-
-fn prepare_disk(
-    sandbox_dir: &Path,
-    runtime_rootfs: &Path,
-    booted_template: Option<&Path>,
-    disk: u64,
-) -> Result<PathBuf, String> {
-    let disk_dir = sandbox_dir.join("disk");
-    std::fs::create_dir_all(&disk_dir).map_err(|e| format!("mkdir disk: {e}"))?;
-    let root = disk_dir.join("root.raw");
-    if !root.exists() {
-        // Runtime lives on the Nix volume; Sandbox disks live on the data
-        // volume. clonefile cannot cross volumes, so copy onto this volume
-        // once and clone from there. A baked ready guest is already on
-        // this volume.
-        if let Some(booted) = booted_template.filter(|p| p.is_file()) {
-            clone_or_copy(booted, &root)?;
-        } else {
-            let template = sandbox_dir
-                .parent()
-                .unwrap_or(sandbox_dir)
-                .join(".runtime-root.raw");
-            ensure_runtime_template(runtime_rootfs, &template)?;
-            clone_or_copy(&template, &root)?;
-        }
-        let mut perms = std::fs::metadata(&root)
-            .map_err(|e| format!("stat rootfs: {e}"))?
-            .permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        perms.set_readonly(false);
-        std::fs::set_permissions(&root, perms).map_err(|e| format!("chmod rootfs: {e}"))?;
-    }
-    let len = std::fs::metadata(&root)
-        .map_err(|e| format!("stat disk: {e}"))?
-        .len();
-    if len > disk {
-        return Err(format!(
-            "disk image ({len} bytes) exceeds Limit ({disk} bytes)"
-        ));
-    }
-    if len < disk {
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&root)
-            .map_err(|e| format!("open disk: {e}"))?;
-        file.set_len(disk).map_err(|e| format!("grow disk: {e}"))?;
-    }
-    Ok(root)
-}
-
-fn ensure_runtime_template(src: &Path, template: &Path) -> Result<(), String> {
-    let key = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
-    let key_path = template.with_extension("src");
-    let same = template.is_file()
-        && std::fs::read_to_string(&key_path).ok().as_deref()
-            == Some(key.to_string_lossy().as_ref());
-    if same {
-        return Ok(());
-    }
-    if let Some(parent) = template.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir template: {e}"))?;
-    }
-    let tmp = template.with_extension("tmp");
-    let _ = std::fs::remove_file(&tmp);
-    std::fs::copy(src, &tmp).map_err(|e| format!("copy rootfs template: {e}"))?;
-    std::fs::rename(&tmp, template).map_err(|e| format!("install rootfs template: {e}"))?;
-    std::fs::write(&key_path, key.to_string_lossy().as_bytes())
-        .map_err(|e| format!("write rootfs template key: {e}"))?;
-    Ok(())
-}
-
-fn clone_or_copy(src: &Path, dst: &Path) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        if clonefile(src, dst) {
-            return Ok(());
-        }
-    }
-    std::fs::copy(src, dst)
-        .map(|_| ())
-        .map_err(|e| format!("copy rootfs: {e}"))
-}
+#[cfg(target_os = "macos")]
+pub struct VzEngine;
 
 #[cfg(target_os = "macos")]
-fn clonefile(src: &Path, dst: &Path) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(src_c) = std::ffi::CString::new(src.as_os_str().as_bytes()) else {
-        return false;
-    };
-    let Ok(dst_c) = std::ffi::CString::new(dst.as_os_str().as_bytes()) else {
-        return false;
-    };
-    unsafe { libc::clonefile(src_c.as_ptr(), dst_c.as_ptr(), 0) == 0 }
-}
+impl crate::vmm::Engine for VzEngine {
+    fn boot(
+        &self,
+        runtime: &Runtime,
+        id: Uuid,
+        sandbox_dir: &Path,
+        limits: Limits,
+        mac_id: Uuid,
+    ) -> Result<(), String> {
+        start_vm(runtime, id, sandbox_dir, limits, mac_id)
+    }
 
-#[allow(dead_code)]
-fn runtime_key_matches(dir: &Path, src: &Path) -> bool {
-    let key = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
-    std::fs::read_to_string(dir.join("runtime.src"))
-        .ok()
-        .as_deref()
-        == Some(key.to_string_lossy().as_ref())
-}
+    fn restore(
+        &self,
+        runtime: &Runtime,
+        id: Uuid,
+        sandbox_dir: &Path,
+        limits: Limits,
+        mac_id: Uuid,
+        save: &Path,
+    ) -> Result<(), String> {
+        restore_vm(runtime, id, sandbox_dir, limits, mac_id, save)
+    }
 
-fn read_mac_id(dir: &Path, fallback: Uuid) -> Uuid {
-    std::fs::read_to_string(dir.join("mac.id"))
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(fallback)
-}
+    fn pause(&self, id: Uuid) -> Result<(), String> {
+        pause_vm(id)
+    }
 
-fn write_mac_id(dir: &Path, id: Uuid) {
-    let _ = std::fs::write(dir.join("mac.id"), id.to_string());
+    fn save(&self, id: Uuid, save: &Path) -> Result<(), String> {
+        save_vm(id, save)
+    }
+
+    fn stop(&self, id: Uuid) -> Result<(), String> {
+        stop_vm(id)
+    }
+
+    fn vsock(&self, id: Uuid, port: u32) -> Result<std::os::unix::net::UnixStream, String> {
+        vsock_connect(id, port)
+    }
 }
 
 /// One NAT network per Sandbox. Shared-mode vmnet lets guests reach the
@@ -659,39 +481,6 @@ fn save_vm(id: Uuid, save: &Path) -> Result<(), String> {
     wait_result(rx, std::time::Duration::from_secs(120), "save")
 }
 
-#[cfg(not(target_os = "macos"))]
-fn start_vm(
-    _runtime: &Runtime,
-    _id: Uuid,
-    _sandbox_dir: &Path,
-    _limits: Limits,
-    _mac_id: Uuid,
-) -> Result<(), String> {
-    Err("Virtualization.framework is macOS-only".into())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn restore_vm(
-    _runtime: &Runtime,
-    _id: Uuid,
-    _sandbox_dir: &Path,
-    _limits: Limits,
-    _mac_id: Uuid,
-    _save: &Path,
-) -> Result<(), String> {
-    Err("Virtualization.framework is macOS-only".into())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn pause_vm(_id: Uuid) -> Result<(), String> {
-    Err("Virtualization.framework is macOS-only".into())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn save_vm(_id: Uuid, _save: &Path) -> Result<(), String> {
-    Err("Virtualization.framework is macOS-only".into())
-}
-
 #[cfg(target_os = "macos")]
 fn stop_vm(id: Uuid) -> Result<(), String> {
     use std::sync::mpsc;
@@ -742,11 +531,6 @@ fn stop_vm(id: Uuid) -> Result<(), String> {
             Err(e) => return Err(format!("channel: {e}")),
         }
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn stop_vm(_id: Uuid) -> Result<(), String> {
-    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -819,11 +603,6 @@ fn vsock_connect(id: Uuid, port: u32) -> Result<std::os::unix::net::UnixStream, 
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn vsock_connect(_id: Uuid, _port: u32) -> Result<std::os::unix::net::UnixStream, String> {
-    Err("Virtualization.framework is macOS-only".into())
-}
-
 #[cfg(target_os = "macos")]
 fn nsurl(path: &str) -> objc2::rc::Retained<objc2_foundation::NSURL> {
     use objc2_foundation::{NSString, NSURL};
@@ -862,77 +641,5 @@ mod tests {
         assert_eq!(first & 0x01, 0, "unicast");
         assert_eq!(first & 0x02, 0x02, "locally administered");
         assert_eq!(mac.chars().filter(|c| *c == ':').count(), 5);
-    }
-
-    #[test]
-    fn prepare_root_disk_copies_and_grows() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("runtime.raw");
-        std::fs::write(&src, vec![0u8; 64]).unwrap();
-        let sandbox = dir.path().join("sb");
-        let root = super::prepare_root_disk(&sandbox, &src, 256).unwrap();
-        assert_eq!(std::fs::metadata(&root).unwrap().len(), 256);
-        assert_eq!(&std::fs::read(&root).unwrap()[..64], &[0u8; 64]);
-
-        std::fs::write(&src, vec![1u8; 64]).unwrap();
-        super::prepare_root_disk(&sandbox, &src, 256).unwrap();
-        assert_eq!(&std::fs::read(&root).unwrap()[..64], &[0u8; 64]);
-    }
-
-    #[test]
-    fn prepare_root_disk_clones_from_a_same_volume_template() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("runtime.raw");
-        std::fs::write(&src, b"rootfs").unwrap();
-        let a = super::prepare_root_disk(&dir.path().join("a"), &src, 64).unwrap();
-        let b = super::prepare_root_disk(&dir.path().join("b"), &src, 64).unwrap();
-        assert_eq!(std::fs::read(&a).unwrap()[..6], *b"rootfs");
-        assert_eq!(std::fs::read(&b).unwrap()[..6], *b"rootfs");
-        assert!(dir.path().join(".runtime-root.raw").is_file());
-    }
-
-    #[test]
-    fn prepare_root_disk_refuses_when_image_exceeds_limit() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("runtime.raw");
-        std::fs::write(&src, vec![0u8; 200]).unwrap();
-        let err = super::prepare_root_disk(&dir.path().join("sb"), &src, 100).unwrap_err();
-        assert!(err.contains("exceeds"));
-    }
-
-    #[test]
-    fn mac_id_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        super::write_mac_id(dir.path(), super::TEMPLATE_ID);
-        assert_eq!(
-            super::read_mac_id(dir.path(), uuid::Uuid::nil()),
-            super::TEMPLATE_ID
-        );
-    }
-
-    #[test]
-    fn prepare_disk_clones_a_booted_template() {
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("runtime.raw");
-        let booted = dir.path().join("booted.raw");
-        std::fs::write(&src, b"unbooted").unwrap();
-        std::fs::write(&booted, b"booted!!").unwrap();
-        let root = super::prepare_disk(&dir.path().join("sb"), &src, Some(&booted), 64).unwrap();
-        assert_eq!(&std::fs::read(&root).unwrap()[..8], b"booted!!");
-    }
-
-    #[test]
-    fn template_ready_needs_save_disk_and_runtime_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let hv = super::Hypervisor::new(
-            crate::runtime::Runtime {
-                kernel: dir.path().join("k"),
-                initrd: dir.path().join("i"),
-                rootfs: dir.path().join("r"),
-                cmdline: "console=hvc0".into(),
-            },
-            dir.path().to_path_buf(),
-        );
-        assert!(!hv.template_ready());
     }
 }

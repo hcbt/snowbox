@@ -1,7 +1,7 @@
 //! Publish maps a Sandbox port onto 127.0.0.1 on the Host.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
@@ -10,7 +10,7 @@ use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
 use crate::sandbox::ActionError;
-use crate::vz::{self, Hypervisor};
+use crate::vmm::{AGENT_PORT, Control, Hypervisor};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Mapping {
@@ -125,7 +125,7 @@ fn proxy(vmm: Arc<Hypervisor>, sandbox: Uuid, port: u16, incoming: TcpStream) {
         return;
     };
     let _ = host.set_nonblocking(false);
-    let Ok(mut guest) = vmm.vsock(sandbox, vz::AGENT_PORT) else {
+    let Ok(mut guest) = Control::vsock(&*vmm, sandbox, AGENT_PORT) else {
         return;
     };
     if guest

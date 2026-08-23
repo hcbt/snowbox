@@ -2,11 +2,13 @@
 # `devenv shell` do not fall through to Homebrew.
 { pkgs, ... }:
 let
+  guestSystem =
+    if pkgs.stdenv.hostPlatform.isDarwin then "aarch64-linux" else pkgs.stdenv.hostPlatform.system;
   # Canvas + guest (if missing) + Daemon. `devenv up` / `devenv shell -- snowbox`.
   stack = ''
     set -euo pipefail
     if [ ! -f guest/result/root.raw ]; then
-      nix build path:./guest#packages.aarch64-linux.runtime --out-link guest/result
+      nix build path:./guest#packages.${guestSystem}.runtime --out-link guest/result
     fi
     ( cd canvas && bun install && bun run build )
     export SNOWBOX_RUNTIME="$PWD/guest/result"
@@ -32,7 +34,8 @@ in
     pkgs.pkg-config
     pkgs.nix.dev
     pkgs.llvmPackages.libclang
-  ];
+  ]
+  ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.qemu ];
 
   env.LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
@@ -41,9 +44,10 @@ in
 
   scripts.canvas.exec = "cd canvas && bun install && bun run build";
 
-  # Guest runtime is aarch64-linux (NixOS 26.05). On Darwin this goes
-  # through linux-builder. The Daemon looks at guest/result or SNOWBOX_RUNTIME.
-  scripts.guest.exec = "nix build path:./guest#packages.aarch64-linux.runtime --out-link guest/result";
+  # Guest runtime is NixOS 26.05. Darwin builds aarch64-linux through
+  # linux-builder; Linux builds the host architecture. The Daemon looks
+  # at guest/result or SNOWBOX_RUNTIME.
+  scripts.guest.exec = "nix build path:./guest#packages.${guestSystem}.runtime --out-link guest/result";
 
   git-hooks.package = pkgs.prek;
   git-hooks.hooks = {

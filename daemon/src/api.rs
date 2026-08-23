@@ -18,7 +18,7 @@ use crate::layout::{Layout, LayoutStore};
 use crate::publish::Publisher;
 use crate::sandbox::{ActionError, Limits, State as SandboxState, Store};
 use crate::templates::Library;
-use crate::vz::Hypervisor;
+use crate::vmm::{Hypervisor, SAVE_NAME, StartKind};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -444,14 +444,14 @@ fn boot_claimed(
     );
     let t1 = std::time::Instant::now();
     let ready_for = match kind {
-        crate::vz::StartKind::Restored => std::time::Duration::from_secs(8),
-        crate::vz::StartKind::Cold => std::time::Duration::from_secs(90),
+        StartKind::Restored => std::time::Duration::from_secs(8),
+        StartKind::Cold => std::time::Duration::from_secs(90),
     };
     if let Err(e) = crate::agent::wait_ready(vmm, id, ready_for) {
-        if kind == crate::vz::StartKind::Restored {
+        if kind == StartKind::Restored {
             eprintln!("sandbox {id}: restored agent dead ({e}); booting");
             let _ = vmm.stop(id);
-            let _ = std::fs::remove_file(dir.join(crate::vz::SAVE_NAME));
+            let _ = std::fs::remove_file(dir.join(SAVE_NAME));
             vmm.start_cold(id, &dir, sandbox.limits)
                 .map_err(ActionError::Failed)?;
             crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(90))
@@ -505,7 +505,7 @@ fn halt(
     let dir = store.dir(id);
     let _ = crate::agent::tar_out(&vmm, id, "/workspace", &dir.join("workspace"));
     let _ = crate::agent::tar_out(&vmm, id, "/home/snow", &dir.join("home"));
-    let save = dir.join(crate::vz::SAVE_NAME);
+    let save = dir.join(SAVE_NAME);
     if let Err(e) = vmm.save_and_stop(id, &save) {
         eprintln!("sandbox {id}: save failed ({e}); power off");
         let _ = std::fs::remove_file(&save);

@@ -18,7 +18,9 @@ mod api;
 mod auth;
 mod cache;
 mod catalog;
+mod disk;
 mod environment;
+mod kvm;
 mod layout;
 mod nar;
 mod nix;
@@ -28,6 +30,8 @@ mod runtime;
 mod sandbox;
 mod sign;
 mod templates;
+mod vmm;
+#[cfg(target_os = "macos")]
 mod vz;
 
 const FALLBACK_CANVAS: &str = r#"<!doctype html>
@@ -68,7 +72,7 @@ fn main() -> Result<()> {
         }
         std::process::exit(0);
     });
-    vz::pump_main_run_loop();
+    vmm::pump_main_run_loop();
     Ok(())
 }
 
@@ -88,7 +92,7 @@ async fn run_daemon() -> Result<()> {
             "runtime {}",
             rt.kernel.parent().unwrap_or(rt.kernel.as_path()).display()
         );
-        Arc::new(vz::Hypervisor::new(rt, data.clone()))
+        vmm::attach(rt, data.clone())
     });
     if vmm.is_none() {
         eprintln!("runtime missing (build guest, or set SNOWBOX_RUNTIME)");
@@ -125,7 +129,7 @@ async fn run_daemon() -> Result<()> {
     eprintln!("token {}", token_path.display());
     eprintln!(
         "virtualization {}",
-        if vz::is_supported() {
+        if vmm::is_supported() {
             "supported"
         } else {
             "unsupported"
