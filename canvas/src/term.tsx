@@ -1,13 +1,24 @@
-import { onSettled } from "solid-js";
+import { createEffect, onSettled } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
-export function Term(props: { windowId: string }) {
+export function Term(props: {
+  windowId: string;
+  active?: boolean;
+  onActivate?: () => void;
+}) {
   let host!: HTMLDivElement;
+  let term: Terminal | undefined;
+
+  const grab = (e: Event) => {
+    e.stopPropagation();
+    props.onActivate?.();
+    term?.focus();
+  };
 
   onSettled(() => {
-    const term = new Terminal({
+    const t = new Terminal({
       cursorBlink: true,
       fontFamily: "ui-monospace, Menlo, Monaco, monospace",
       fontSize: 13,
@@ -19,10 +30,14 @@ export function Term(props: { windowId: string }) {
         selectionForeground: "#ffffff",
       },
     });
+    term = t;
     const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(host);
-    requestAnimationFrame(() => fit.fit());
+    t.loadAddon(fit);
+    t.open(host);
+    requestAnimationFrame(() => {
+      fit.fit();
+      if (props.active !== false) t.focus();
+    });
 
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(
@@ -31,27 +46,44 @@ export function Term(props: { windowId: string }) {
     ws.binaryType = "arraybuffer";
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") {
-        term.write(ev.data);
+        t.write(ev.data);
         return;
       }
-      term.write(new Uint8Array(ev.data as ArrayBuffer));
+      t.write(new Uint8Array(ev.data as ArrayBuffer));
     };
-    term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(data);
+    const enc = new TextEncoder();
+    t.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(enc.encode(data));
     });
     let dropped = false;
     ws.onclose = () => {
-      if (!dropped) term.write("\r\n[window closed]\r\n");
+      if (!dropped) t.write("\r\n[window closed]\r\n");
     };
     const ro = new ResizeObserver(() => fit.fit());
     ro.observe(host);
     return () => {
       dropped = true;
+      term = undefined;
       ro.disconnect();
       ws.close();
-      term.dispose();
+      t.dispose();
     };
   });
 
-  return <div ref={host} class="h-full w-full bg-white" />;
+  createEffect(
+    () => props.active,
+    (active) => {
+      if (active) term?.focus();
+    },
+  );
+
+  return (
+    <div
+      ref={host}
+      data-win={props.windowId}
+      class="h-full w-full bg-white"
+      onPointerDown={grab}
+      onMouseDown={grab}
+    />
+  );
 }

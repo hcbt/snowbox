@@ -31,4 +31,8 @@
   button {
     @apply appearance-none;
   }
+
+  .xterm-helper-textarea {
+    user-select: text !important;
+  }
 }

@@ -83,10 +83,21 @@ export function App() {
 
   const running = () => sandboxes().filter((s) => s.state === "running");
 
+  const focusTerm = (id: string) => {
+    const el = document.querySelector(
+      `[data-win="${id}"] textarea.xterm-helper-textarea`,
+    ) as HTMLTextAreaElement | null;
+    el?.focus({ preventScroll: true });
+  };
+
   const raise = (id: string) => {
-    const z = Math.max(0, ...layout().windows.map((w) => w.z)) + 1;
     setFocus(id);
-    patchWin(id, { z }, true);
+    focusTerm(id);
+    const z = Math.max(0, ...layout().windows.map((w) => w.z));
+    const cur = layout().windows.find((w) => w.id === id);
+    if (!cur || cur.z === z) return;
+    patchWin(id, { z: z + 1 }, false);
+    queueMicrotask(() => focusTerm(id));
   };
 
   const run = async (fn: () => Promise<unknown>) => {
@@ -207,18 +218,21 @@ export function App() {
             <span class="flex-1">Icon Manager</span>
           </div>
           <div class="border-x-2 border-b-2 border-twm">
-            <For each={layout().windows.filter((w) => live(w.sandbox))}>
+            <For
+              each={layout().windows.filter((w) => live(w.sandbox))}
+              keyed={(w) => w.id}
+            >
               {(w) => (
                 <button
                   type="button"
                   class="block w-full border-0 border-t border-twm-line bg-twm px-2 py-0.5 text-left font-bold text-white hover:bg-twm-hi"
-                  classList={{ "bg-twm-hi": focus() === w.id }}
+                  classList={{ "bg-twm-hi": focus() === w().id }}
                   onClick={() => {
-                    patchWin(w.id, { iconified: false }, true);
-                    raise(w.id);
+                    patchWin(w().id, { iconified: false }, true);
+                    raise(w().id);
                   }}
                 >
-                  {w.title}
+                  {w().title}
                 </button>
               )}
             </For>
@@ -226,29 +240,29 @@ export function App() {
         </div>
       </Show>
 
-      <For each={layout().windows}>
+      <For each={layout().windows} keyed={(w) => w.id}>
         {(w) => (
-          <Show when={!w.iconified && live(w.sandbox)}>
+          <Show when={!w().iconified && live(w().sandbox)}>
             <div
               class="absolute flex min-h-20 min-w-[180px] flex-col"
               style={{
-                left: `${w.x}px`,
-                top: `${w.y}px`,
-                width: `${w.w}px`,
-                height: `${w.h}px`,
-                "z-index": w.z,
+                left: `${w().x}px`,
+                top: `${w().y}px`,
+                width: `${w().w}px`,
+                height: `${w().h}px`,
+                "z-index": w().z,
               }}
-              onMouseDown={() => raise(w.id)}
+              onMouseDown={() => raise(w().id)}
             >
               <div
                 class="flex h-5 shrink-0 cursor-grab items-center gap-1.5 bg-twm px-[3px] text-[13px] font-bold text-white active:cursor-grabbing"
-                onMouseDown={(e) => drag(e, "move", w.id)}
+                onMouseDown={(e) => drag(e, "move", w().id)}
               >
                 <span class="relative size-3 shrink-0 border border-white bg-twm-hi">
                   <span class="absolute top-[3px] left-[3px] size-1.5 bg-white" />
                 </span>
                 <span class="flex-1 overflow-hidden whitespace-nowrap">
-                  {w.title}
+                  {w().title}
                 </span>
                 <button
                   type="button"
@@ -256,17 +270,21 @@ export function App() {
                   title="Iconify"
                   onClick={(e) => {
                     e.stopPropagation();
-                    patchWin(w.id, { iconified: true }, true);
+                    patchWin(w().id, { iconified: true }, true);
                   }}
                 >
                   <span class="absolute right-0.5 bottom-[3px] left-0.5 h-0.5 bg-white" />
                 </button>
               </div>
               <div class="relative min-h-0 flex-1 border-x-2 border-b-2 border-twm bg-white">
-                <Term windowId={w.id} />
+                <Term
+                  windowId={w().id}
+                  active={focus() === w().id}
+                  onActivate={() => raise(w().id)}
+                />
                 <div
                   class="absolute right-0 bottom-0 size-3 cursor-se-resize"
-                  onMouseDown={(e) => drag(e, "resize", w.id)}
+                  onMouseDown={(e) => drag(e, "resize", w().id)}
                 />
               </div>
             </div>
