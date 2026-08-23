@@ -91,6 +91,8 @@
       isNormalUser = true;
       extraGroups = [ "wheel" ];
       home = "/home/snow";
+      # Login shell for Windows. Written to passwd; snowbox-shell runs
+      # `runuser --login -u snow` and does not hardcode a bash path.
       shell = pkgs.bashInteractive;
     };
     users.users.root.hashedPassword = "!";
@@ -150,16 +152,12 @@
       serviceConfig = {
         ExecStart = "${lib.getExe' config.snowbox.control "snowbox-shell"}";
         Restart = "always";
-        Environment = [
-          "SNOWBOX_BASH=${lib.getExe pkgs.bashInteractive}"
-          "PATH=${
-            lib.makeBinPath [
-              pkgs.util-linux
-              pkgs.bashInteractive
-              pkgs.coreutils
-            ]
-          }"
-        ];
+        Environment = "PATH=${
+          lib.makeBinPath [
+            pkgs.util-linux
+            pkgs.coreutils
+          ]
+        }";
       };
     };
   };

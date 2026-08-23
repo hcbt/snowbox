@@ -13,11 +13,11 @@ pub fn handle_socket(stream: UnixStream) -> io::Result<()> {
     ws.ws_col = 80;
     let (master, slave) = openpty(&ws)?;
 
+    // NixOS writes snow's login shell into passwd (users.users.snow.shell).
+    // runuser --login with no command starts that shell. Do not pass /bin/bash.
     let mut child = unsafe {
         Command::new("runuser")
-            .args(["-u", "snow", "--"])
-            .arg(crate::bash_path())
-            .arg("-l")
+            .args(["--login", "-u", "snow"])
             .stdin(Stdio::from(slave.try_clone()?))
             .stdout(Stdio::from(slave.try_clone()?))
             .stderr(Stdio::from(slave))
