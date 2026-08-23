@@ -26,9 +26,9 @@ export function Term(props: {
       fontSize: 13,
       scrollback: 5000,
       theme: {
-        background: "#111111",
-        foreground: "#e6e6e6",
-        cursor: "#e6e6e6",
+        background: "#ffffff",
+        foreground: "#000000",
+        cursor: "#000000",
         selectionBackground: "#c3366d",
         selectionForeground: "#ffffff",
       },
@@ -95,7 +95,7 @@ export function Term(props: {
     <div
       ref={host}
       data-win={props.windowId}
-      class="h-full w-full bg-black"
+      class="h-full w-full bg-white"
       onPointerDown={grab}
       onMouseDown={grab}
     />
