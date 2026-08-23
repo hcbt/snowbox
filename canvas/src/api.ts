@@ -8,6 +8,13 @@ export type Sandbox = {
   limits: Limits;
 };
 
+export type PackageHit = {
+  name: string;
+  program: string;
+  description: string;
+  unfree: boolean;
+};
+
 export type WindowRec = {
   id: string;
   sandbox: string;
@@ -82,6 +89,11 @@ export const api = {
     }),
   packages: (id: string) =>
     json<{ packages: string[] }>(`/api/v1/sandboxes/${id}/packages`),
+  searchPackages: (q: string, unfree = false) => {
+    const p = new URLSearchParams({ q });
+    if (unfree) p.set("unfree", "true");
+    return json<{ packages: PackageHit[] }>(`/api/v1/packages?${p}`);
+  },
   copyIn: (id: string, from: string, replace: boolean) =>
     json<Sandbox>(`/api/v1/sandboxes/${id}/copy-in`, {
       method: "POST",

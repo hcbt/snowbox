@@ -17,6 +17,33 @@ pub struct Realized {
     pub export: Vec<u8>,
 }
 
+pub(crate) fn path_flake_url_pub(path: &Path) -> Result<String, ActionError> {
+    let path = path
+        .canonicalize()
+        .map_err(|e| ActionError::Failed(e.to_string()))?;
+    Ok(path_flake_url(&path))
+}
+
+pub(crate) fn eval_string(expr: &str, origin: &str) -> Result<String, ActionError> {
+    let _eval = EVAL.lock().map_err(|_| ActionError::Internal)?;
+    eval_state::init().map_err(|e| ActionError::Failed(e.to_string()))?;
+    let _gc = gc_register_my_thread().map_err(|e| ActionError::Failed(e.to_string()))?;
+    let _ = nix_bindings_util::settings::set("experimental-features", "nix-command flakes");
+    let store = NixStore::open(None, []).map_err(|e| ActionError::Failed(e.to_string()))?;
+    let flake_settings = FlakeSettings::new().map_err(|e| ActionError::Failed(e.to_string()))?;
+    let mut es = EvalStateBuilder::new(store)
+        .map_err(|e| ActionError::Failed(e.to_string()))?
+        .flakes(&flake_settings)
+        .map_err(|e| ActionError::Failed(e.to_string()))?
+        .build()
+        .map_err(|e| ActionError::Failed(e.to_string()))?;
+    let value = es
+        .eval_from_string(expr, origin)
+        .map_err(|e| ActionError::Failed(format!("eval: {e}")))?;
+    es.require_string(&value)
+        .map_err(|e| ActionError::Failed(format!("eval string: {e}")))
+}
+
 fn path_flake_url(path: &Path) -> String {
     let raw = path.to_string_lossy();
     let mut enc = String::from("path:");
@@ -32,10 +59,10 @@ fn path_flake_url(path: &Path) -> String {
     enc
 }
 
-static REALIZE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static EVAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub fn realize_environment(flake_dir: &Path, cache: &Cache) -> Result<Realized, ActionError> {
-    let _realize = REALIZE.lock().map_err(|_| ActionError::Internal)?;
+    let _realize = EVAL.lock().map_err(|_| ActionError::Internal)?;
     eval_state::init().map_err(|e| ActionError::Failed(e.to_string()))?;
     let _gc = gc_register_my_thread().map_err(|e| ActionError::Failed(e.to_string()))?;
     let _ = nix_bindings_util::settings::set("experimental-features", "nix-command flakes");

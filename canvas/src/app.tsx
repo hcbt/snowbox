@@ -3,6 +3,7 @@ import { Term } from "./term";
 import {
   api,
   type Layout,
+  type PackageHit,
   type Sandbox,
   type WindowRec,
 } from "./api";
@@ -494,8 +495,33 @@ function OverlayDialog(props: {
     String((props.sandbox?.limits.disk ?? 17179869184) / (1024 * 1024 * 1024)),
   );
   const [pkg, setPkg] = createSignal("");
+  const [unfree, setUnfree] = createSignal(false);
+  const [hits, setHits] = createSignal<PackageHit[]>([]);
+  const [installed, setInstalled] = createSignal<string[]>([]);
   const [path, setPath] = createSignal("");
   const [replace, setReplace] = createSignal(false);
+
+  onSettled(() => {
+    if (props.overlay.kind !== "packages" || !props.sandbox) return;
+    api
+      .packages(props.sandbox.id)
+      .then((r) => setInstalled(r.packages))
+      .catch(() => {});
+  });
+
+  const look = async (q: string) => {
+    setPkg(q);
+    if (q.trim().length < 2) {
+      setHits([]);
+      return;
+    }
+    try {
+      setHits((await api.searchPackages(q.trim(), unfree())).packages);
+    } catch {
+      setHits([]);
+    }
+  };
+
   const title =
     props.overlay.kind === "sandbox"
       ? "New Sandbox"
@@ -520,7 +546,9 @@ function OverlayDialog(props: {
         }),
       );
     } else if (ov.kind === "packages") {
-      props.run(() => api.addPackage(ov.id, pkg()));
+      const first = hits()[0];
+      if (first) props.run(() => api.addPackage(ov.id, first.name));
+      else return;
     } else if (ov.kind === "copy") {
       props.run(() =>
         ov.dir === "in"
@@ -575,10 +603,44 @@ function OverlayDialog(props: {
           </label>
         </Show>
         <Show when={props.overlay.kind === "packages"}>
+          <div class="text-[12px]">{installed().join(", ") || "none yet"}</div>
           <label class={label}>
-            add package
-            <input class={field} value={pkg()} onInput={(e) => setPkg(e.currentTarget.value)} />
+            search
+            <input
+              class={field}
+              value={pkg()}
+              placeholder="program or description"
+              onInput={(e) => look(e.currentTarget.value)}
+            />
           </label>
+          <label class="mt-2 flex items-center gap-2 font-bold">
+            <input
+              type="checkbox"
+              checked={unfree()}
+              onChange={(e) => {
+                setUnfree(e.currentTarget.checked);
+                if (pkg().trim().length >= 2) look(pkg());
+              }}
+            />
+            unfree
+          </label>
+          <div class="mt-2 max-h-48 overflow-y-auto border border-neutral-400">
+            <For each={hits()} fallback={<div class="px-2 py-1 text-[12px]">no matches</div>}>
+              {(h) => (
+                <button
+                  type="button"
+                  class="block w-full border-0 border-t border-neutral-300 bg-white px-2 py-1 text-left hover:bg-twm-hi hover:text-white"
+                  onClick={() => {
+                    props.run(() => api.addPackage((props.overlay as { id: string }).id, h.name));
+                    props.close();
+                  }}
+                >
+                  <span class="font-bold">{h.program}</span>
+                  <span class="ml-2 text-[12px]">{h.description}</span>
+                </button>
+              )}
+            </For>
+          </div>
         </Show>
         <Show when={props.overlay.kind === "copy"}>
           <label class={label}>

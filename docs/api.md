@@ -40,8 +40,9 @@ Reset restores the system (drops the writable guest disk so the next start is a 
 | `POST` | `/sandboxes/{id}/reset` | Keep Workspace + Home allowlist; restore system. `404` if missing |
 | `POST` | `/sandboxes/{id}/copy-in` | Body `{"from":"/host/path","replace":false}` |
 | `POST` | `/sandboxes/{id}/copy-out` | Body `{"to":"/host/path","replace":false}` |
+| `GET` | `/packages?q=&unfree=` | Search nixpkgs by program name or description. `unfree=true` includes unfree Packages (off by default). |
 | `GET` | `/sandboxes/{id}/packages` | Environment package names (nixpkgs attributes). |
-| `POST` | `/sandboxes/{id}/packages` | Body `{"add":"hello"}`. Updates the Host Environment. If the Sandbox is running, realises into the Cache and copies into the guest (no reboot). |
+| `POST` | `/sandboxes/{id}/packages` | Body `{"add":"hello"}`. `add` is the catalog name from search. Updates the Host Environment. If the Sandbox is running, realises into the Cache and copies into the guest (no reboot). |
 | `DELETE` | `/sandboxes/{id}` | Destroy. Deletes the disk. Allowed in either state. `404` if missing |
 
 Create body:

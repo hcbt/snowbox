@@ -17,6 +17,7 @@ mod agent;
 mod api;
 mod auth;
 mod cache;
+mod catalog;
 mod environment;
 mod layout;
 mod nar;
@@ -91,11 +92,16 @@ async fn run_daemon() -> Result<()> {
         eprintln!("runtime missing (build guest, or set SNOWBOX_RUNTIME)");
     }
     eprintln!("cache {}", cache.root().display());
+    let catalog_flake = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../environment/empty");
     let state = api::AppState {
         token,
         store: Arc::new(store),
         cache: Arc::new(cache),
         layout: Arc::new(layout),
+        catalog: Arc::new(catalog::Catalog::from_flake(
+            catalog_flake,
+            data.join("catalog.json"),
+        )),
         vmm,
     };
     let app = with_ui(api::router(state.clone()), state.clone()).layer(

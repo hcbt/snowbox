@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     middleware,
     routing::{get, post},
@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::auth::require_token;
 use crate::cache::Cache;
+use crate::catalog::Catalog;
 use crate::layout::{Layout, LayoutStore};
 use crate::sandbox::{ActionError, Limits, State as SandboxState, Store};
 use crate::vz::Hypervisor;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub cache: Arc<Cache>,
     pub layout: Arc<LayoutStore>,
+    pub catalog: Arc<Catalog>,
     pub vmm: Option<Arc<Hypervisor>>,
 }
 
@@ -75,6 +77,13 @@ pub struct AddPackageBody {
     pub add: String,
 }
 
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    pub q: String,
+    #[serde(default)]
+    pub unfree: bool,
+}
+
 pub fn router(state: AppState) -> Router {
     let v1 = Router::new()
         .route("/health", get(health))
@@ -85,6 +94,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sandboxes/{id}/reset", post(reset))
         .route("/sandboxes/{id}/copy-in", post(copy_in))
         .route("/sandboxes/{id}/copy-out", post(copy_out))
+        .route("/packages", get(search_packages))
         .route(
             "/sandboxes/{id}/packages",
             get(list_packages).post(add_package),
@@ -216,6 +226,21 @@ async fn copy_out(
     Json(body): Json<CopyOutBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     action(state.store.copy_out(id, &body.to, body.replace))
+}
+
+async fn search_packages(
+    State(state): State<AppState>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let catalog = state.catalog.clone();
+    let q = query.q;
+    let unfree = query.unfree;
+    let hits = tokio::task::spawn_blocking(move || catalog.search(&q, unfree, 30))
+        .await
+        .map_err(|_| ActionError::Internal)
+        .and_then(|r| r)
+        .map_err(map_err)?;
+    Ok(Json(serde_json::json!({ "packages": hits })))
 }
 
 async fn list_packages(
@@ -444,6 +469,26 @@ mod tests {
             store: Arc::new(Store::open(dir.path()).unwrap()),
             cache: Arc::new(Cache::open(dir.path().join("cache")).unwrap()),
             layout: Arc::new(LayoutStore::open(dir.path().join("layout.json")).unwrap()),
+            catalog: Arc::new(crate::catalog::Catalog::memory(vec![
+                crate::catalog::Package {
+                    name: "jq".into(),
+                    program: "jq".into(),
+                    description: "Lightweight and flexible command-line JSON processor".into(),
+                    unfree: false,
+                },
+                crate::catalog::Package {
+                    name: "ripgrep".into(),
+                    program: "rg".into(),
+                    description: "fast line-oriented search tool".into(),
+                    unfree: false,
+                },
+                crate::catalog::Package {
+                    name: "unrar".into(),
+                    program: "unrar".into(),
+                    description: "RAR archive tool".into(),
+                    unfree: true,
+                },
+            ])),
             vmm: None,
         };
         (dir, state)
@@ -707,6 +752,70 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|p| p == "jq")
+        );
+    }
+
+    #[tokio::test]
+    async fn package_search_is_by_program_and_hides_unfree() {
+        let (_dir, state) = harness();
+        let make = || router(state.clone());
+        let (status, hits) = send(
+            make(),
+            authed(Request::get("http://127.0.0.1/api/v1/packages?q=rg"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let list = hits["packages"].as_array().unwrap();
+        assert!(
+            list.iter()
+                .any(|p| p["program"] == "rg" && p["name"] == "ripgrep")
+        );
+        assert!(list.iter().all(|p| p["unfree"] == false));
+
+        let (status, json) = send(
+            make(),
+            authed(Request::get("http://127.0.0.1/api/v1/packages?q=json"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            json["packages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["name"] == "jq")
+        );
+
+        let (status, hidden) = send(
+            make(),
+            authed(Request::get("http://127.0.0.1/api/v1/packages?q=unrar"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(hidden["packages"].as_array().unwrap().is_empty());
+
+        let (status, shown) = send(
+            make(),
+            authed(Request::get(
+                "http://127.0.0.1/api/v1/packages?q=unrar&unfree=true",
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            shown["packages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["unfree"] == true && p["name"] == "unrar")
         );
     }
 
