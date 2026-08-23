@@ -11,7 +11,7 @@ The computer Snowbox is installed on. The human uses the Host; the Agent does no
 _Avoid_: local machine, laptop, server
 
 **Sandbox**:
-A persistent isolated Nix-built Linux environment on the Host. GPU in the Sandbox is out of v1 planning (research later, not a promise). You start, stop, reset, and destroy a Sandbox. Snowbox is the product; a Sandbox is one running or stopped instance. A Sandbox may run zero or more Agents; they share Workspace, Home, and Environment and can conflict. Many Sandboxes may run at once; they do not share filesystem or network with each other. They may copy Packages from the Cache. The primary way to work in a Sandbox is a terminal in the Host browser. SSH and editor-remote are possible if the Environment contains the usual Unix packages; they are not Snowbox features. A Sandbox port is closed to the Host until explicitly Published.
+A persistent isolated Nix-built Linux environment on the Host. GPU in the Sandbox is out of v1 planning (research later, not a promise). You start, stop, reset, and destroy a Sandbox. Snowbox is the product; a Sandbox is one running or stopped instance. A Sandbox may run zero or more Agents; they share Workspace, Home, and Environment and can conflict. Many Sandboxes may run at once; they do not share filesystem or network with each other. They may copy Packages from the Cache. You work in a Sandbox through its Windows on the Canvas. SSH and editor-remote are possible if the Environment contains the usual Unix packages; they are not Snowbox features. A Sandbox port is closed to the Host until explicitly Published.
 _Avoid_: guest, VM, microVM, container, box, machine, environment (for the instance), NixOS (as a button), Ubuntu
 
 **Workspace**:
@@ -27,7 +27,7 @@ A command that runs *inside* a Sandbox and drives coding work. Not a named vendo
 _Avoid_: bot, assistant, LLM, model, Claude, Grok, Codex (as product nouns)
 
 **Daemon**:
-The Host process that owns Sandboxes and serves the UI. Closing the browser does not stop Sandboxes. Quitting the Daemon does. It exposes a documented API on `127.0.0.1`. Callers need a token stored in the user’s config; loopback is not auth. Remote machines are not callers. It is the only writer of the Cache.
+The Host process that owns Sandboxes and serves the Canvas. Closing the browser does not stop Sandboxes or forget Layout. Quitting the Daemon does. It exposes a documented API on `127.0.0.1`. Callers need a token stored in the user’s config; loopback is not auth. Remote machines are not callers. It is the only writer of the Cache.
 _Avoid_: server, backend, engine, runtime, app (when you mean this process), platform, cloud
 
 **Cache**:
@@ -69,3 +69,15 @@ _Avoid_: credential, env var (when you mean the secret itself)
 **Limits**:
 Per-Sandbox CPU, RAM, and disk caps, set in the UI at create and editable later. Isolation is not only confidentiality; a Sandbox may not eat the Host by default.
 _Avoid_: quota, cgroup, resources (when you mean this)
+
+**Canvas**:
+The Host browser UI. One surface: Sandboxes are Windows on it. Package search, Templates, Limits, copy-in/out, and Publish are overlays on that surface, not other home screens.
+_Avoid_: dashboard, lobby, desktop, IDE, workspace (that is files)
+
+**Window**:
+A Snowbox-owned terminal attached to one Sandbox, a free-floating rectangle on the Canvas. A Sandbox may have several. Opening one starts a shell in that Sandbox; closing it ends that shell, not the Sandbox. Not an Agent.
+_Avoid_: pane, tab, session, tmux, xterm, PTY (as a GUI noun)
+
+**Layout**:
+The Host-side arrangement of Windows — which exist, position, size, stacking. The Daemon stores it. The Sandbox does not know about it.
+_Avoid_: session, workspace, desktop
