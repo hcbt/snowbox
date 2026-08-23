@@ -1,6 +1,5 @@
-# Host-side shell. vfkit is the Virtualization.framework VMM (ADR 0010).
-# Everyday utilities are pinned so `nix develop` / `devenv shell` do not fall
-# through to Homebrew.
+# Host-side shell. Everyday utilities are pinned so `nix develop` /
+# `devenv shell` do not fall through to Homebrew.
 { pkgs, ... }:
 {
   languages.rust.enable = true;
@@ -18,7 +17,6 @@
     pkgs.gnused
     pkgs.findutils
     pkgs.curl
-    pkgs.vfkit
   ];
 
   processes.snowbox.exec = "cargo run -p snowbox";

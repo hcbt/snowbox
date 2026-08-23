@@ -11,6 +11,7 @@ use rand::Rng;
 mod api;
 mod auth;
 mod sandbox;
+mod vz;
 
 const FALLBACK_CANVAS: &str = r#"<!doctype html>
 <html lang="en">
@@ -60,6 +61,14 @@ async fn main() -> Result<()> {
     let url = format!("http://{bind}/");
     eprintln!("snowbox {url}");
     eprintln!("token {}", token_path.display());
+    eprintln!(
+        "virtualization {}",
+        if vz::is_supported() {
+            "supported"
+        } else {
+            "unsupported"
+        }
+    );
     open_browser(&url);
 
     axum::serve(listener, app).await.context("serve")?;

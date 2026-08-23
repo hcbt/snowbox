@@ -5,13 +5,13 @@ Snowbox runs a coding Agent inside an isolated Nix-built Linux Sandbox on the Ho
 ## Language and decisions
 
 - **[CONTEXT.md](CONTEXT.md)** — glossary. Use those nouns (Host, Sandbox, Workspace, Home, Daemon, Cache, Package, Template, Environment, Canvas, Window, Layout). Read it before naming anything in code or docs.
-- **[docs/adr/](docs/adr/)** — irreversible trade-offs. Read the matching ADR before changing isolation, the Cache, the Environment, the Daemon API, the Host OS/hypervisor, the Daemon language (Rust, [0019](docs/adr/0019-daemon-is-rust.md)), or the GUI ([0020](docs/adr/0020-gui-is-a-canvas-of-windows.md), [0021](docs/adr/0021-ui-is-a-solid-spa.md)).
+- **[docs/adr/](docs/adr/)** — irreversible trade-offs. Read the matching ADR before changing isolation, the Cache, the Environment, the Daemon API, the Host OS/hypervisor, the Daemon language (Rust, [0019](docs/adr/0019-daemon-is-rust.md)), the macOS VMM ([0022](docs/adr/0022-daemon-embeds-virtualization-framework.md)), or the GUI ([0020](docs/adr/0020-gui-is-a-canvas-of-windows.md), [0021](docs/adr/0021-ui-is-a-solid-spa.md)).
 
 ## How to work here
 
 - Enter the env with `devenv shell -- <cmd>`. Do not use host Python/Node/toolchains. Rust is `languages.rust` in devenv. The Canvas JS toolchain is Bun (`languages.javascript.bun`), not npm.
 - Run the Daemon with `devenv shell -- cargo run -p snowbox` (or `devenv up`). That is how v1 starts. `flake.nix` is empty until we package for `nix run`.
-- The Daemon is Rust. Nix store/flake work goes through [nix-bindings-rust](https://github.com/nixops4/nix-bindings-rust), not the `nix` CLI ([0019](docs/adr/0019-daemon-is-rust.md)). Host glue that is not the Daemon stays **inline in Nix**. Do not add standalone `.sh` files.
+- The Daemon is Rust. On macOS it embeds Virtualization.framework via `objc2-virtualization`, not vfkit ([0022](docs/adr/0022-daemon-embeds-virtualization-framework.md)). Nix store/flake work goes through [nix-bindings-rust](https://github.com/nixops4/nix-bindings-rust), not the `nix` CLI ([0019](docs/adr/0019-daemon-is-rust.md)). Host glue that is not the Daemon stays **inline in Nix**. Do not add standalone `.sh` files.
 - The bundled UI is a Solid 2 + Vite + Tailwind SPA built with Bun and served by the Daemon, a client of the documented API ([0021](docs/adr/0021-ui-is-a-solid-spa.md)). The GUI is a Canvas of Windows ([0020](docs/adr/0020-gui-is-a-canvas-of-windows.md)).
 - Layout: `devenv.nix` is the Host shell. `flake.nix` is future `nix run` packaging, not how you run today. `daemon/` is the Rust Daemon.
 

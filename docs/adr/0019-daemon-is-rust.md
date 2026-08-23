@@ -1,6 +1,6 @@
 # The Daemon is Rust
 
-The Host process has to drive vfkit, speak a documented localhost HTTP API, and talk to Nix (realize an Environment, copy into the Cache, copy into a Sandbox). Go is the boring match for vfkit. Python matches more of this author's other apps.
+The Host process has to embed Virtualization.framework on macOS ([0022](0022-daemon-embeds-virtualization-framework.md)), speak a documented localhost HTTP API, and talk to Nix (realize an Environment, copy into the Cache, copy into a Sandbox). Go would match a vfkit child process; we are not doing that.
 
 Rust wins because the Nix interaction is core, not incidental, and the crate ecosystem for store/NAR/copy work is where we will spend time. Shipping remains `nix run`. The product Daemon is Rust, not inline Nix.
 
