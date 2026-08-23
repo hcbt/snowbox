@@ -13,11 +13,11 @@ pub fn handle_socket(stream: UnixStream) -> io::Result<()> {
     ws.ws_col = 80;
     let (master, slave) = openpty(&ws)?;
 
-    // NixOS writes snow's login shell into passwd (users.users.snow.shell).
-    // runuser --login with no command starts that shell. Do not pass /bin/bash.
+    // util-linux: `runuser -u user` requires a command and cannot take --login.
+    // `runuser -l user` is the su-compatible login form: shell from passwd.
     let mut child = unsafe {
         Command::new("runuser")
-            .args(["--login", "-u", "snow"])
+            .args(["-l", "snow"])
             .stdin(Stdio::from(slave.try_clone()?))
             .stdout(Stdio::from(slave.try_clone()?))
             .stderr(Stdio::from(slave))

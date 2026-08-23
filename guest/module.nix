@@ -92,7 +92,7 @@
       extraGroups = [ "wheel" ];
       home = "/home/snow";
       # Login shell for Windows. Written to passwd; snowbox-shell runs
-      # `runuser --login -u snow` and does not hardcode a bash path.
+      # `runuser -l snow` (su-compatible login, not `runuser -u`).
       shell = pkgs.bashInteractive;
     };
     users.users.root.hashedPassword = "!";
