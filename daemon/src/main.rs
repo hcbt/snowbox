@@ -1,15 +1,16 @@
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result};
-use axum::{http::header, response::Html, routing::get, Router};
+use axum::response::Html;
 use rand::Rng;
 
-fn bind_addr() -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], 5418))
-}
+mod api;
+mod auth;
+mod sandbox;
 
 const FALLBACK_CANVAS: &str = r#"<!doctype html>
 <html lang="en">
@@ -31,14 +32,20 @@ const FALLBACK_CANVAS: &str = r#"<!doctype html>
 </html>
 "#;
 
+fn bind_addr() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], 5418))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let token_path = token_path()?;
-    ensure_token(&token_path)?;
+    let token = load_or_create_token(&token_path)?;
 
-    let app = Router::new()
-        .route("/api/health", get(health))
-        .fallback(canvas);
+    let state = api::AppState {
+        token,
+        store: Arc::new(sandbox::Store::new()),
+    };
+    let app = api::router(state).fallback(canvas);
 
     let bind = bind_addr();
     let listener = tokio::net::TcpListener::bind(bind)
@@ -50,14 +57,8 @@ async fn main() -> Result<()> {
     eprintln!("token {}", token_path.display());
     open_browser(&url);
 
-    axum::serve(listener, app)
-        .await
-        .context("serve")?;
+    axum::serve(listener, app).await.context("serve")?;
     Ok(())
-}
-
-async fn health() -> ([(header::HeaderName, &'static str); 1], &'static str) {
-    ([(header::CONTENT_TYPE, "application/json")], r#"{"ok":true}"#)
 }
 
 async fn canvas() -> Html<&'static str> {
@@ -69,16 +70,19 @@ fn token_path() -> Result<PathBuf> {
     Ok(base.join("snowbox").join("token"))
 }
 
-fn ensure_token(path: &Path) -> Result<()> {
+fn load_or_create_token(path: &Path) -> Result<String> {
     if path.exists() {
-        return Ok(());
+        let raw =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        return Ok(raw.trim().to_string());
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
     }
     let bytes: [u8; 32] = rand::rng().random();
-    std::fs::write(path, hex::encode(bytes)).with_context(|| format!("write {}", path.display()))?;
-    Ok(())
+    let token = hex::encode(bytes);
+    std::fs::write(path, &token).with_context(|| format!("write {}", path.display()))?;
+    Ok(token)
 }
 
 fn open_browser(url: &str) {

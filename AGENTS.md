@@ -19,6 +19,6 @@ Snowbox runs a coding Agent inside an isolated Nix-built Linux Sandbox on the Ho
 
 - Workspace lives on the Sandbox disk at `/workspace`, not a Host mount.
 - Environment is a Host document. The Daemon is the only Cache writer. Guests copy from the Cache; they do not share `/nix/store`.
-- Daemon API is `127.0.0.1` plus a token. Loopback is not auth.
+- Daemon API is `127.0.0.1` plus a token. Loopback is not auth. Contract: [docs/api.md](docs/api.md).
 - SSH and editor-remote are Unix side effects, not product features.
 - Do not put personal tracker identifiers (issue IDs, private board URLs, git branch names generated from those IDs) in this public repo.
