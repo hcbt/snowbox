@@ -87,6 +87,8 @@ export const api = {
     json<Sandbox>(`/api/v1/sandboxes/${id}/start`, { method: "POST" }),
   stop: (id: string) =>
     json<Sandbox>(`/api/v1/sandboxes/${id}/stop`, { method: "POST" }),
+  reset: (id: string) =>
+    json<Sandbox>(`/api/v1/sandboxes/${id}/reset`, { method: "POST" }),
   destroy: (id: string) =>
     req(`/api/v1/sandboxes/${id}`, { method: "DELETE" }),
   layout: () => json<Layout>("/api/v1/layout"),

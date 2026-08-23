@@ -210,6 +210,25 @@ async fn reset(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(vmm) = state.vmm.clone() {
+        let store = state.store.clone();
+        let resume = state.resume.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let running = store.get(id)?.state == SandboxState::Running;
+            if running {
+                let _ = vmm.stop(id);
+                store.stop(id)?;
+                resume.unmark(id);
+            }
+            store.reset(id)
+        })
+        .await
+        .map_err(|_| ActionError::Internal)
+        .and_then(|r| r);
+        state.publish.drop_sandbox(id);
+        state.sessions.drop_sandbox(id);
+        return action(result);
+    }
     action(state.store.reset(id))
 }
 

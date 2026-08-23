@@ -20,7 +20,8 @@ type Overlay =
   | { kind: "save-template"; id: string; x: number; y: number }
   | { kind: "publish"; id: string; x: number; y: number }
   | { kind: "copy"; id: string; dir: "in" | "out"; x: number; y: number }
-  | { kind: "destroy"; id: string; x: number; y: number };
+  | { kind: "destroy"; id: string; x: number; y: number }
+  | { kind: "reset"; id: string; x: number; y: number };
 
 type Menu = { x: number; y: number } | null;
 
@@ -303,6 +304,10 @@ export function App() {
             const sb = targetSandbox();
             if (sb) setOverlay({ kind: "destroy", id: sb.id, ...placeOverlay() });
           }}
+          onReset={() => {
+            const sb = targetSandbox();
+            if (sb) setOverlay({ kind: "reset", id: sb.id, ...placeOverlay() });
+          }}
           onToggleIcons={() =>
             save({
               ...layout(),
@@ -384,6 +389,7 @@ function RootMenu(props: {
   onStart: () => void;
   onStop: () => void;
   onDestroy: () => void;
+  onReset: () => void;
   onToggleIcons: () => void;
   onLimits: () => void;
   onPackages: () => void;
@@ -454,6 +460,14 @@ function RootMenu(props: {
         onClick={() => go(props.onDestroy)}
       >
         Destroy {sb()?.name ?? ""}…
+      </button>
+      <button
+        type="button"
+        class={item}
+        disabled={!sb()}
+        onClick={() => go(props.onReset)}
+      >
+        Reset {sb()?.name ?? ""}…
       </button>
       <button type="button" class={item} disabled={!sb()} onClick={() => go(props.onLimits)}>
         Limits of {sb()?.name ?? ""}…
@@ -574,6 +588,7 @@ function OverlayDialog(props: {
     if (ov.kind === "save-template") return `Save ${sbName()} as Template`;
     if (ov.kind === "publish") return `Publish — ${sbName()}`;
     if (ov.kind === "destroy") return `Destroy ${sbName()}`;
+    if (ov.kind === "reset") return `Reset ${sbName()}`;
     if (ov.kind === "copy") return ov.dir === "in" ? `Copy in — ${sbName()}` : `Copy out — ${sbName()}`;
     return "snowbox";
   };
@@ -616,6 +631,8 @@ function OverlayDialog(props: {
       props.run(async () => {
         await api.destroy(ov.id);
       });
+    } else if (ov.kind === "reset") {
+      props.run(() => api.reset(ov.id));
     } else if (ov.kind === "sandboxes") {
       props.close();
       return;
@@ -667,6 +684,12 @@ function OverlayDialog(props: {
         <Show when={props.overlay.kind === "destroy"}>
           <p class="text-[13px]">
             Destroy {sbName()}? Workspace is gone unless copy-out already happened.
+          </p>
+        </Show>
+        <Show when={props.overlay.kind === "reset"}>
+          <p class="text-[13px]">
+            Reset {sbName()}? Declared Packages stay. Undeclared tools are gone.
+            Workspace and Home remain.
           </p>
         </Show>
         <Show when={props.overlay.kind === "sandbox"}>
@@ -805,7 +828,11 @@ function OverlayDialog(props: {
               type="submit"
               class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
             >
-              {props.overlay.kind === "destroy" ? `Destroy ${sbName()}` : "OK"}
+              {props.overlay.kind === "destroy"
+                ? `Destroy ${sbName()}`
+                : props.overlay.kind === "reset"
+                  ? `Reset ${sbName()}`
+                  : "OK"}
             </button>
           </div>
         </Show>
