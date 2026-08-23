@@ -1,5 +1,4 @@
-# Shell, formatters, git hooks. Guest image and vfkit runner live in flake.nix
-# (they need nixosSystem + aarch64-linux, which devenv's rolling channel is not).
+# Shell, formatters, git hooks. The Daemon crate will live in the flake.
 inputs:
   nixpkgs:
     url: github:cachix/devenv-nixpkgs/rolling

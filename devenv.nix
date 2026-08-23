@@ -3,6 +3,8 @@
 # through to Homebrew.
 { pkgs, ... }:
 {
+  languages.rust.enable = true;
+
   packages = [
     pkgs.git
     pkgs.gh
