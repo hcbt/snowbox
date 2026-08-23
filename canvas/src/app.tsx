@@ -1,5 +1,6 @@
 import { For, Show, createSignal, onSettled } from "solid-js";
 import { Term } from "./term";
+import { Frame } from "./frame";
 import {
   api,
   type Layout,
@@ -12,14 +13,18 @@ import {
 
 type Overlay =
   | null
-  | { kind: "sandbox" }
-  | { kind: "limits"; id: string }
-  | { kind: "packages"; id: string }
-  | { kind: "save-template"; id: string }
-  | { kind: "publish"; id: string }
-  | { kind: "copy"; id: string; dir: "in" | "out" };
+  | { kind: "sandbox"; x: number; y: number }
+  | { kind: "sandboxes"; x: number; y: number }
+  | { kind: "limits"; id: string; x: number; y: number }
+  | { kind: "packages"; id: string; x: number; y: number }
+  | { kind: "save-template"; id: string; x: number; y: number }
+  | { kind: "publish"; id: string; x: number; y: number }
+  | { kind: "copy"; id: string; dir: "in" | "out"; x: number; y: number }
+  | { kind: "destroy"; id: string; x: number; y: number };
 
 type Menu = { x: number; y: number } | null;
+
+const overlayZ = 50000;
 
 export function App() {
   const [sandboxes, setSandboxes] = createSignal<Sandbox[]>([]);
@@ -28,6 +33,7 @@ export function App() {
     icon_manager: { x: 8, y: 8, visible: true },
   });
   const [focus, setFocus] = createSignal<string | null>(null);
+  const [picked, setPicked] = createSignal<string | null>(null);
   const [menu, setMenu] = createSignal<Menu>(null);
   const [overlay, setOverlay] = createSignal<Overlay>(null);
   const [status, setStatus] = createSignal("");
@@ -79,14 +85,15 @@ export function App() {
     if (persist) save(next);
   };
 
-  const focusedSandbox = () => {
-    const fid = focus();
-    const win = layout().windows.find((w) => w.id === fid);
-    if (win) return sandboxes().find((s) => s.id === win.sandbox);
-    return sandboxes()[0];
-  };
+  const focusedWindow = () => layout().windows.find((w) => w.id === focus()) ?? null;
 
-  const running = () => sandboxes().filter((s) => s.state === "running");
+  const targetSandbox = () => {
+    const win = focusedWindow();
+    if (win) return sandboxes().find((s) => s.id === win.sandbox);
+    const id = picked();
+    if (id) return sandboxes().find((s) => s.id === id);
+    return undefined;
+  };
 
   const focusTerm = (id: string) => {
     const el = document.querySelector(
@@ -97,6 +104,8 @@ export function App() {
 
   const raise = (id: string) => {
     setFocus(id);
+    const win = layout().windows.find((w) => w.id === id);
+    if (win) setPicked(win.sandbox);
     focusTerm(id);
     const z = Math.max(0, ...layout().windows.map((w) => w.z));
     const cur = layout().windows.find((w) => w.id === id);
@@ -119,63 +128,30 @@ export function App() {
     }
   };
 
-  const newWindow = () => {
-    const sb =
-      running().find((s) => s.id === focusedSandbox()?.id) ?? running()[0];
-    if (!sb) {
-      setStatus("start a Sandbox first");
-      return;
-    }
-    run(async () => {
-      await api.openWindow(sb.id);
-    });
+  const openMenu = (e: MouseEvent, windowId?: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (windowId) raise(windowId);
+    setMenu({ x: e.clientX, y: e.clientY });
   };
 
-  const drag = (
-    e: MouseEvent,
-    kind: "move" | "resize" | "resize-e" | "resize-s" | "icons",
-    id?: string,
-  ) => {
+  const placeOverlay = (x = 220, y = 56) => ({ x, y });
+
+  const dragIcons = (e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
     const startY = e.clientY;
-    if (kind === "icons") {
-      const { x, y } = layout().icon_manager;
-      const move = (ev: MouseEvent) => {
-        setLayout({
-          ...layout(),
-          icon_manager: {
-            ...layout().icon_manager,
-            x: x + ev.clientX - startX,
-            y: y + ev.clientY - startY,
-          },
-        });
-      };
-      const up = () => {
-        window.removeEventListener("mousemove", move);
-        window.removeEventListener("mouseup", up);
-        save(layout());
-      };
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
-      return;
-    }
-    const win = layout().windows.find((w) => w.id === id);
-    if (!win) return;
-    raise(win.id);
-    const { x, y, w, h } = win;
+    const { x, y } = layout().icon_manager;
     const move = (ev: MouseEvent) => {
-      const dx = ev.clientX - startX;
-      const dy = ev.clientY - startY;
-      if (kind === "move") {
-        patchWin(win.id, { x: x + dx, y: y + dy });
-      } else {
-        patchWin(win.id, {
-          w: Math.max(180, kind === "resize-s" ? w : w + dx),
-          h: Math.max(80, kind === "resize-e" ? h : h + dy),
-        });
-      }
+      setLayout({
+        ...layout(),
+        icon_manager: {
+          ...layout().icon_manager,
+          x: x + ev.clientX - startX,
+          y: y + ev.clientY - startY,
+        },
+      });
     };
     const up = () => {
       window.removeEventListener("mousemove", move);
@@ -189,10 +165,7 @@ export function App() {
   return (
     <div
       class="relative h-full w-full bg-x11"
-      onContextMenu={(e) => {
-        e.preventDefault();
-        setMenu({ x: e.clientX, y: e.clientY });
-      }}
+      onContextMenu={(e) => openMenu(e)}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) setMenu(null);
       }}
@@ -205,10 +178,11 @@ export function App() {
             top: `${layout().icon_manager.y}px`,
             "z-index": 99990,
           }}
+          onContextMenu={(e) => openMenu(e)}
         >
           <div
             class="flex h-5 cursor-grab items-center gap-1.5 bg-twm px-[3px] text-[13px] font-bold text-white"
-            onMouseDown={(e) => drag(e, "icons")}
+            onMouseDown={dragIcons}
           >
             <span class="size-3 shrink-0 border border-white bg-twm-hi" />
             <span class="flex-1">Icon Manager</span>
@@ -228,6 +202,7 @@ export function App() {
                     raise(w().id);
                     if (!live(w().sandbox) && !busy()) run(() => api.start(w().sandbox));
                   }}
+                  onContextMenu={(e) => openMenu(e, w().id)}
                 >
                   {w().title}
                 </button>
@@ -240,71 +215,39 @@ export function App() {
       <For each={layout().windows} keyed={(w) => w.id}>
         {(w) => (
           <Show when={!w().iconified}>
-            <div
-              class="absolute flex min-h-20 min-w-[180px] flex-col"
-              style={{
-                left: `${w().x}px`,
-                top: `${w().y}px`,
-                width: `${w().w}px`,
-                height: `${w().h}px`,
-                "z-index": w().z,
-              }}
+            <Frame
+              title={w().title}
+              x={w().x}
+              y={w().y}
+              w={w().w}
+              h={w().h}
+              z={w().z}
+              dataWin={w().id}
               onMouseDown={() => {
                 raise(w().id);
                 if (!live(w().sandbox) && !busy()) run(() => api.start(w().sandbox));
               }}
+              onContextMenu={(e) => openMenu(e, w().id)}
+              onMove={(x, y) => patchWin(w().id, { x, y })}
+              onMoveEnd={() => save(layout())}
+              onResize={(nw, nh) => patchWin(w().id, { w: nw, h: nh })}
+              onIconify={() => patchWin(w().id, { iconified: true }, true)}
             >
-              <div
-                class="flex h-5 shrink-0 cursor-grab items-center gap-1 bg-twm px-[3px] text-[13px] font-bold text-white active:cursor-grabbing"
-                onMouseDown={(e) => drag(e, "move", w().id)}
+              <Show
+                when={live(w().sandbox)}
+                fallback={
+                  <div class="flex h-full items-center justify-center font-twm text-[13px] text-neutral-500">
+                    stopped — Start {sandboxes().find((s) => s.id === w().sandbox)?.name ?? "this Sandbox"}
+                  </div>
+                }
               >
-                <span class="relative size-3 shrink-0 border border-white bg-twm-hi">
-                  <span class="absolute top-[3px] left-[3px] size-1.5 bg-white" />
-                </span>
-                <span class="min-w-0 flex-1 overflow-hidden whitespace-nowrap">
-                  {w().title}
-                </span>
-                <button
-                  type="button"
-                  class="relative size-3 shrink-0 border border-white bg-twm"
-                  title="Iconify"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    patchWin(w().id, { iconified: true }, true);
-                  }}
-                >
-                  <span class="absolute right-[2px] bottom-[3px] left-[2px] h-0.5 bg-white" />
-                </button>
-              </div>
-              <div class="relative min-h-0 flex-1 border-x-2 border-b-2 border-twm bg-white">
-                <Show
-                  when={live(w().sandbox)}
-                  fallback={
-                    <div class="flex h-full items-center justify-center font-twm text-[13px] text-neutral-500">
-                      stopped
-                    </div>
-                  }
-                >
-                  <Term
-                    windowId={w().id}
-                    active={focus() === w().id}
-                    onActivate={() => raise(w().id)}
-                  />
-                </Show>
-                <div
-                  class="absolute top-0 right-0 z-20 h-full w-2 cursor-e-resize"
-                  onMouseDown={(e) => drag(e, "resize-e", w().id)}
+                <Term
+                  windowId={w().id}
+                  active={focus() === w().id}
+                  onActivate={() => raise(w().id)}
                 />
-                <div
-                  class="absolute bottom-0 left-0 z-20 h-2 w-full cursor-s-resize"
-                  onMouseDown={(e) => drag(e, "resize-s", w().id)}
-                />
-                <div
-                  class="absolute right-0 bottom-0 z-30 size-4 cursor-se-resize"
-                  onMouseDown={(e) => drag(e, "resize", w().id)}
-                />
-              </div>
-            </div>
+              </Show>
+            </Frame>
           </Show>
         )}
       </For>
@@ -313,14 +256,24 @@ export function App() {
         <RootMenu
           x={menu()!.x}
           y={menu()!.y}
-          sandbox={focusedSandbox()}
-          hasRunning={running().length > 0}
+          sandbox={targetSandbox()}
+          window={focusedWindow()}
           iconMgr={layout().icon_manager.visible}
-          onNewWindow={newWindow}
-          onNewSandbox={() => setOverlay({ kind: "sandbox" })}
+          onNewSandbox={() => setOverlay({ kind: "sandbox", ...placeOverlay() })}
+          onSandboxes={() => setOverlay({ kind: "sandboxes", ...placeOverlay() })}
           onSaveTemplate={() => {
-            const sb = focusedSandbox();
-            if (sb) setOverlay({ kind: "save-template", id: sb.id });
+            const sb = targetSandbox();
+            if (sb) setOverlay({ kind: "save-template", id: sb.id, ...placeOverlay() });
+          }}
+          onNewWindow={() => {
+            const sb = targetSandbox();
+            if (!sb || sb.state !== "running") {
+              setStatus("Start that Sandbox first");
+              return;
+            }
+            run(async () => {
+              await api.openWindow(sb.id);
+            });
           }}
           onIconify={() => {
             const id = focus();
@@ -334,21 +287,21 @@ export function App() {
             const id = focus();
             if (id) patchWin(id, { z: 1 }, true);
           }}
-          onKill={() => {
+          onCloseWindow={() => {
             const id = focus();
             if (id) run(() => api.closeWindow(id));
           }}
           onStart={() => {
-            const sb = focusedSandbox();
+            const sb = targetSandbox();
             if (sb) run(() => api.start(sb.id));
           }}
           onStop={() => {
-            const sb = focusedSandbox();
+            const sb = targetSandbox();
             if (sb) run(() => api.stop(sb.id));
           }}
           onDestroy={() => {
-            const sb = focusedSandbox();
-            if (sb) run(() => api.destroy(sb.id));
+            const sb = targetSandbox();
+            if (sb) setOverlay({ kind: "destroy", id: sb.id, ...placeOverlay() });
           }}
           onToggleIcons={() =>
             save({
@@ -360,20 +313,20 @@ export function App() {
             })
           }
           onLimits={() => {
-            const sb = focusedSandbox();
-            if (sb) setOverlay({ kind: "limits", id: sb.id });
+            const sb = targetSandbox();
+            if (sb) setOverlay({ kind: "limits", id: sb.id, ...placeOverlay() });
           }}
           onPackages={() => {
-            const sb = focusedSandbox();
-            if (sb) setOverlay({ kind: "packages", id: sb.id });
+            const sb = targetSandbox();
+            if (sb) setOverlay({ kind: "packages", id: sb.id, ...placeOverlay() });
           }}
           onPublish={() => {
-            const sb = focusedSandbox();
-            if (sb) setOverlay({ kind: "publish", id: sb.id });
+            const sb = targetSandbox();
+            if (sb) setOverlay({ kind: "publish", id: sb.id, ...placeOverlay() });
           }}
           onCopy={(dir) => {
-            const sb = focusedSandbox();
-            if (sb) setOverlay({ kind: "copy", id: sb.id, dir });
+            const sb = targetSandbox();
+            if (sb) setOverlay({ kind: "copy", id: sb.id, dir, ...placeOverlay() });
           }}
           close={() => setMenu(null)}
         />
@@ -384,8 +337,18 @@ export function App() {
           overlay={overlay()!}
           sandbox={sandboxes().find((s) => {
             const ov = overlay();
-            return ov !== null && ov.kind !== "sandbox" && s.id === ov.id;
+            return ov !== null && "id" in ov && s.id === ov.id;
           })}
+          sandboxes={sandboxes()}
+          move={(x, y) => {
+            const ov = overlay();
+            if (ov) setOverlay({ ...ov, x, y });
+          }}
+          pickSandbox={(id) => {
+            setPicked(id);
+            setFocus(null);
+            setOverlay(null);
+          }}
           close={() => setOverlay(null)}
           run={run}
         />
@@ -408,15 +371,16 @@ function RootMenu(props: {
   x: number;
   y: number;
   sandbox?: Sandbox;
-  hasRunning: boolean;
+  window: WindowRec | null;
   iconMgr: boolean;
   onNewWindow: () => void;
   onNewSandbox: () => void;
+  onSandboxes: () => void;
   onSaveTemplate: () => void;
   onIconify: () => void;
   onRaise: () => void;
   onLower: () => void;
-  onKill: () => void;
+  onCloseWindow: () => void;
   onStart: () => void;
   onStop: () => void;
   onDestroy: () => void;
@@ -429,84 +393,115 @@ function RootMenu(props: {
 }) {
   const item =
     "block w-full cursor-pointer border-0 bg-transparent px-3 py-0.5 text-left font-twm text-[13px] font-bold text-white hover:bg-twm-hi disabled:cursor-default disabled:text-twm-muted";
+  const head = "px-3 py-0.5 font-twm text-[11px] font-bold text-twm-muted";
+  const sb = () => props.sandbox;
+  const win = () => props.window;
+  const go = (fn: () => void) => {
+    fn();
+    props.close();
+  };
   return (
     <div
-      class="absolute z-[100000] min-w-40 border border-neutral-800 bg-twm text-white shadow-[1px_1px_0_#000]"
+      class="absolute z-[100000] min-w-52 border border-neutral-800 bg-twm text-white shadow-[1px_1px_0_#000]"
       style={{ left: `${props.x}px`, top: `${props.y}px` }}
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div class="bg-twm-head px-2.5 py-0.5 font-bold text-twm">snowbox</div>
-      <button type="button" class={item} onClick={() => { props.onNewSandbox(); props.close(); }}>
+      <button type="button" class={item} onClick={() => go(props.onNewSandbox)}>
         New Sandbox
       </button>
-      <button type="button" class={item} disabled={!props.sandbox} onClick={() => { props.onSaveTemplate(); props.close(); }}>
-        Save Template…
+      <button type="button" class={item} onClick={() => go(props.onSandboxes)}>
+        Sandboxes…
+      </button>
+      <div class="my-0.5 h-px bg-twm-line" />
+      <div class={head}>{sb() ? `Sandbox ${sb()!.name}` : "no Sandbox selected"}</div>
+      <button
+        type="button"
+        class={item}
+        disabled={!sb() || sb()!.state !== "running"}
+        onClick={() => go(props.onNewWindow)}
+      >
+        New Window{sb() ? ` on ${sb()!.name}` : ""}
       </button>
       <button
         type="button"
         class={item}
-        disabled={!props.hasRunning}
-        onClick={() => { props.onNewWindow(); props.close(); }}
+        disabled={!sb()}
+        onClick={() => go(props.onSaveTemplate)}
       >
-        New Window
-      </button>
-      <div class="my-0.5 h-px bg-twm-line" />
-      <button type="button" class={item} onClick={() => { props.onIconify(); props.close(); }}>
-        Iconify
-      </button>
-      <button type="button" class={item} onClick={() => { props.onRaise(); props.close(); }}>
-        Raise
-      </button>
-      <button type="button" class={item} onClick={() => { props.onLower(); props.close(); }}>
-        Lower
-      </button>
-      <button type="button" class={item} onClick={() => { props.onToggleIcons(); props.close(); }}>
-        {props.iconMgr ? "Hide Iconmgr" : "Show Iconmgr"}
-      </button>
-      <div class="my-0.5 h-px bg-twm-line" />
-      <button
-        type="button"
-        class={item}
-        disabled={!props.sandbox || props.sandbox.state === "running"}
-        onClick={() => { props.onStart(); props.close(); }}
-      >
-        Start
+        Save {sb()?.name ?? "Sandbox"} as Template…
       </button>
       <button
         type="button"
         class={item}
-        disabled={!props.sandbox || props.sandbox.state !== "running"}
-        onClick={() => { props.onStop(); props.close(); }}
+        disabled={!sb() || sb()!.state === "running"}
+        onClick={() => go(props.onStart)}
       >
-        Stop
+        Start {sb()?.name ?? ""}
       </button>
       <button
         type="button"
         class={item}
-        disabled={!props.sandbox}
-        onClick={() => { props.onDestroy(); props.close(); }}
+        disabled={!sb() || sb()!.state !== "running"}
+        onClick={() => go(props.onStop)}
       >
-        Destroy
+        Stop {sb()?.name ?? ""}
+      </button>
+      <button
+        type="button"
+        class={item}
+        disabled={!sb()}
+        onClick={() => go(props.onDestroy)}
+      >
+        Destroy {sb()?.name ?? ""}…
+      </button>
+      <button type="button" class={item} disabled={!sb()} onClick={() => go(props.onLimits)}>
+        Limits of {sb()?.name ?? ""}…
+      </button>
+      <button type="button" class={item} disabled={!sb()} onClick={() => go(props.onPackages)}>
+        Packages of {sb()?.name ?? ""}…
+      </button>
+      <button
+        type="button"
+        class={item}
+        disabled={!sb() || sb()!.state !== "running"}
+        onClick={() => go(props.onPublish)}
+      >
+        Publish {sb()?.name ?? ""}…
+      </button>
+      <button
+        type="button"
+        class={item}
+        disabled={!sb() || sb()!.state === "running"}
+        onClick={() => go(() => props.onCopy("in"))}
+      >
+        Copy in to {sb()?.name ?? ""}…
+      </button>
+      <button
+        type="button"
+        class={item}
+        disabled={!sb() || sb()!.state === "running"}
+        onClick={() => go(() => props.onCopy("out"))}
+      >
+        Copy out from {sb()?.name ?? ""}…
       </button>
       <div class="my-0.5 h-px bg-twm-line" />
-      <button type="button" class={item} disabled={!props.sandbox} onClick={() => { props.onLimits(); props.close(); }}>
-        Limits…
+      <div class={head}>{win() ? win()!.title : "no Window selected"}</div>
+      <button type="button" class={item} disabled={!win()} onClick={() => go(props.onIconify)}>
+        Iconify {win()?.title ?? ""}
       </button>
-      <button type="button" class={item} disabled={!props.sandbox} onClick={() => { props.onPackages(); props.close(); }}>
-        Packages…
+      <button type="button" class={item} disabled={!win()} onClick={() => go(props.onRaise)}>
+        Raise {win()?.title ?? ""}
       </button>
-      <button type="button" class={item} disabled={!props.sandbox || props.sandbox.state !== "running"} onClick={() => { props.onPublish(); props.close(); }}>
-        Publish…
+      <button type="button" class={item} disabled={!win()} onClick={() => go(props.onLower)}>
+        Lower {win()?.title ?? ""}
       </button>
-      <button type="button" class={item} disabled={!props.sandbox} onClick={() => { props.onCopy("in"); props.close(); }}>
-        Copy in…
-      </button>
-      <button type="button" class={item} disabled={!props.sandbox} onClick={() => { props.onCopy("out"); props.close(); }}>
-        Copy out…
+      <button type="button" class={item} disabled={!win()} onClick={() => go(props.onCloseWindow)}>
+        Close {win()?.title ?? ""}
       </button>
       <div class="my-0.5 h-px bg-twm-line" />
-      <button type="button" class={item} onClick={() => { props.onKill(); props.close(); }}>
-        Kill
+      <button type="button" class={item} onClick={() => go(props.onToggleIcons)}>
+        {props.iconMgr ? "Hide Icon Manager" : "Show Icon Manager"}
       </button>
     </div>
   );
@@ -515,6 +510,9 @@ function RootMenu(props: {
 function OverlayDialog(props: {
   overlay: NonNullable<Overlay>;
   sandbox?: Sandbox;
+  sandboxes: Sandbox[];
+  move: (x: number, y: number) => void;
+  pickSandbox: (id: string) => void;
   close: () => void;
   run: (fn: () => Promise<unknown>) => void;
 }) {
@@ -565,20 +563,20 @@ function OverlayDialog(props: {
     }
   };
 
-  const title =
-    props.overlay.kind === "sandbox"
-      ? "New Sandbox"
-      : props.overlay.kind === "limits"
-        ? "Limits"
-        : props.overlay.kind === "packages"
-          ? "Packages"
-          : props.overlay.kind === "save-template"
-            ? "Save Template"
-          : props.overlay.kind === "publish"
-            ? "Publish"
-          : props.overlay.kind === "copy" && props.overlay.dir === "in"
-            ? "Copy in"
-            : "Copy out";
+  const sbName = () => props.sandbox?.name ?? "";
+
+  const title = () => {
+    const ov = props.overlay;
+    if (ov.kind === "sandbox") return "New Sandbox";
+    if (ov.kind === "sandboxes") return "Sandboxes";
+    if (ov.kind === "limits") return `Limits — ${sbName()}`;
+    if (ov.kind === "packages") return `Packages — ${sbName()}`;
+    if (ov.kind === "save-template") return `Save ${sbName()} as Template`;
+    if (ov.kind === "publish") return `Publish — ${sbName()}`;
+    if (ov.kind === "destroy") return `Destroy ${sbName()}`;
+    if (ov.kind === "copy") return ov.dir === "in" ? `Copy in — ${sbName()}` : `Copy out — ${sbName()}`;
+    return "snowbox";
+  };
 
   const submit = () => {
     const ov = props.overlay;
@@ -614,6 +612,13 @@ function OverlayDialog(props: {
           ? api.copyIn(ov.id, path(), replace())
           : api.copyOut(ov.id, path(), replace()),
       );
+    } else if (ov.kind === "destroy") {
+      props.run(async () => {
+        await api.destroy(ov.id);
+      });
+    } else if (ov.kind === "sandboxes") {
+      props.close();
+      return;
     }
     props.close();
   };
@@ -623,28 +628,47 @@ function OverlayDialog(props: {
   const label = "mt-1.5 block font-bold";
 
   return (
-    <div
-      class="absolute top-16 left-1/2 z-[99999] min-w-80 -translate-x-1/2 text-black"
-      onMouseDown={(e) => e.stopPropagation()}
+    <Frame
+      title={title()}
+      x={props.overlay.x}
+      y={props.overlay.y}
+      z={overlayZ}
+      onMove={props.move}
+      onClose={props.close}
     >
-      <div class="flex h-5 items-center gap-1.5 bg-twm px-[3px] text-[13px] font-bold text-white">
-        <span class="size-3 shrink-0 border border-white bg-twm-hi" />
-        <span class="flex-1">{title}</span>
-        <button
-          type="button"
-          class="flex size-3 shrink-0 items-center justify-center border border-white text-[11px] leading-none text-white"
-          onClick={props.close}
-        >
-          ×
-        </button>
-      </div>
       <form
-        class="border-x-2 border-b-2 border-twm bg-white px-3.5 py-3 font-twm"
+        class="min-w-80 bg-white px-3.5 py-3 font-twm text-black"
         onSubmit={(e) => {
           e.preventDefault();
           submit();
         }}
+        onMouseDown={(e) => e.stopPropagation()}
       >
+        <Show when={props.overlay.kind === "sandboxes"}>
+          <div class="max-h-64 overflow-y-auto border border-neutral-400">
+            <For
+              each={props.sandboxes}
+              keyed={(s) => s.id}
+              fallback={<div class="px-2 py-1 text-[12px]">no Sandboxes</div>}
+            >
+              {(s) => (
+                <button
+                  type="button"
+                  class="block w-full border-0 border-t border-neutral-300 bg-white px-2 py-1 text-left hover:bg-twm-hi hover:text-white"
+                  onClick={() => props.pickSandbox(s().id)}
+                >
+                  <span class="font-bold">{s().name}</span>
+                  <span class="ml-2 text-[12px]">{s().state}</span>
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
+        <Show when={props.overlay.kind === "destroy"}>
+          <p class="text-[13px]">
+            Destroy {sbName()}? Workspace is gone unless copy-out already happened.
+          </p>
+        </Show>
         <Show when={props.overlay.kind === "sandbox"}>
           <label class={label}>
             name
@@ -657,11 +681,11 @@ function OverlayDialog(props: {
               value={tpl()}
               onChange={(e) => setTpl(e.currentTarget.value)}
             >
-              <For each={templates()}>
+              <For each={templates()} keyed={(t) => t.name}>
                 {(t) => (
-                  <option value={t.name}>
-                    {t.name}
-                    {t.shipped ? "" : " (saved)"}
+                  <option value={t().name}>
+                    {t().name}
+                    {t().shipped ? "" : " (saved)"}
                   </option>
                 )}
               </For>
@@ -675,13 +699,13 @@ function OverlayDialog(props: {
           </label>
         </Show>
         <Show when={props.overlay.kind === "publish"}>
-          <For each={published()}>
+          <For each={published()} keyed={(p) => p.port}>
             {(p) => (
               <div class="flex items-center justify-between text-[12px]">
-                <a class="text-twm" href={p.url}>
-                  {p.url}
+                <a class="text-twm" href={p().url}>
+                  {p().url}
                 </a>
-                <span>:{p.port}</span>
+                <span>:{p().port}</span>
               </div>
             )}
           </For>
@@ -731,18 +755,24 @@ function OverlayDialog(props: {
             unfree
           </label>
           <div class="mt-2 max-h-48 overflow-y-auto border border-neutral-400">
-            <For each={hits()} fallback={<div class="px-2 py-1 text-[12px]">no matches</div>}>
+            <For
+              each={hits()}
+              keyed={(h) => h.name}
+              fallback={<div class="px-2 py-1 text-[12px]">no matches</div>}
+            >
               {(h) => (
                 <button
                   type="button"
                   class="block w-full border-0 border-t border-neutral-300 bg-white px-2 py-1 text-left hover:bg-twm-hi hover:text-white"
                   onClick={() => {
-                    props.run(() => api.addPackage((props.overlay as { id: string }).id, h.name));
+                    const ov = props.overlay;
+                    if (ov.kind !== "packages") return;
+                    props.run(() => api.addPackage(ov.id, h().name));
                     props.close();
                   }}
                 >
-                  <span class="font-bold">{h.program}</span>
-                  <span class="ml-2 text-[12px]">{h.description}</span>
+                  <span class="font-bold">{h().program}</span>
+                  <span class="ml-2 text-[12px]">{h().description}</span>
                 </button>
               )}
             </For>
@@ -762,22 +792,24 @@ function OverlayDialog(props: {
             replace
           </label>
         </Show>
-        <div class="mt-3 flex justify-end gap-2">
-          <button
-            type="button"
-            class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
-            onClick={props.close}
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
-          >
-            OK
-          </button>
-        </div>
+        <Show when={props.overlay.kind !== "sandboxes"}>
+          <div class="mt-3 flex justify-end gap-2">
+            <button
+              type="button"
+              class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
+              onClick={props.close}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
+            >
+              {props.overlay.kind === "destroy" ? `Destroy ${sbName()}` : "OK"}
+            </button>
+          </div>
+        </Show>
       </form>
-    </div>
+    </Frame>
   );
 }
