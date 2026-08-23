@@ -67,7 +67,8 @@ impl Hypervisor {
 
     pub fn start(&self, id: Uuid, sandbox_dir: &Path, limits: Limits) -> Result<StartKind, String> {
         let own_save = sandbox_dir.join(SAVE_NAME);
-        if !own_save.exists() {
+        let has_disk = sandbox_dir.join("disk").join("root.raw").is_file();
+        if !own_save.exists() && !has_disk {
             install_ready(sandbox_dir, &self.runtime.rootfs);
         }
         let mac_id = disk::read_mac_id(sandbox_dir, id);
@@ -594,6 +595,30 @@ mod tests {
         assert_eq!(hv.start(id, &b, limits()).unwrap(), StartKind::Cold);
         assert!(fake.restores.lock().unwrap().is_empty());
         assert_eq!(*fake.boots.lock().unwrap(), vec![id]);
+    }
+
+    #[test]
+    fn existing_disk_does_not_consume_the_ready_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(dir.path());
+        let fake = Fake::new();
+        let hv = Hypervisor::wrap(rt.clone(), fake.clone());
+        let a = dir.path().join("a");
+        crate::environment::write_default(&a).unwrap();
+        std::fs::create_dir_all(a.join("disk")).unwrap();
+        std::fs::write(a.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
+        std::fs::write(a.join(SAVE_NAME), b"save").unwrap();
+        std::fs::write(a.join("machine.ident"), b"ident").unwrap();
+        bake_ready(&a, &rt.rootfs);
+
+        let sb = dir.path().join("sb");
+        crate::environment::write_default(&sb).unwrap();
+        std::fs::create_dir_all(sb.join("disk")).unwrap();
+        std::fs::write(sb.join("disk").join("root.raw"), vec![1u8; 64]).unwrap();
+        let id = Uuid::from_u128(13);
+        assert_eq!(hv.start(id, &sb, limits()).unwrap(), StartKind::Cold);
+        assert!(fake.restores.lock().unwrap().is_empty());
+        assert!(ready_dir(&a, &rt.rootfs).join(SAVE_NAME).is_file());
     }
 
     #[test]

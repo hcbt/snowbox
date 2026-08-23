@@ -451,6 +451,10 @@ fn boot_claimed(
     let t0 = std::time::Instant::now();
     let sandbox = store.get(id)?;
     let dir = store.dir(id);
+    let hatching = !dir.join("disk").join("root.raw").is_file() && !dir.join(SAVE_NAME).is_file();
+    if hatching {
+        replenish_ready(vmm, store.root());
+    }
     let kind = vmm
         .start(id, &dir, sandbox.limits)
         .map_err(ActionError::Failed)?;
@@ -540,26 +544,18 @@ fn halt(
     store.stop(id)
 }
 
-static WARMING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 fn kick_replenish(vmm: Arc<Hypervisor>, sandboxes: PathBuf) {
     std::thread::spawn(move || replenish_ready(&vmm, &sandboxes));
 }
 
 fn replenish_ready(vmm: &Hypervisor, sandboxes: &std::path::Path) {
-    if vmm.ready_snapshot_exists(sandboxes) {
-        return;
-    }
-    if WARMING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return;
-    }
-    struct Done;
-    impl Drop for Done {
-        fn drop(&mut self) {
-            WARMING.store(false, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-    let _done = Done;
+    crate::ready::ensure(
+        || vmm.ready_snapshot_exists(sandboxes),
+        || warm_once(vmm, sandboxes),
+    );
+}
+
+fn warm_once(vmm: &Hypervisor, sandboxes: &std::path::Path) -> Result<(), String> {
     eprintln!("ready snapshot: warming");
     let dir = sandboxes.join(".warm");
     let _ = std::fs::remove_dir_all(&dir);
@@ -572,11 +568,11 @@ fn replenish_ready(vmm: &Hypervisor, sandboxes: &std::path::Path) {
         vmm.save_and_stop(id, &dir.join(SAVE_NAME))?;
         Ok::<(), String>(())
     })();
-    if let Err(e) = run {
-        eprintln!("ready snapshot: warm failed ({e})");
+    if run.is_err() {
         let _ = vmm.stop(id);
     }
     let _ = std::fs::remove_dir_all(&dir);
+    run
 }
 
 pub fn resume_and_warm(state: AppState) {
@@ -584,22 +580,6 @@ pub fn resume_and_warm(state: AppState) {
         let Some(vmm) = state.vmm.clone() else {
             return;
         };
-        for id in state.resume.ids() {
-            if state.store.get(id).is_err() {
-                state.resume.unmark(id);
-                continue;
-            }
-            let store = state.store.clone();
-            let cache = state.cache.clone();
-            let vmm = vmm.clone();
-            let resume = state.resume.clone();
-            match tokio::task::spawn_blocking(move || boot(store, cache, vmm, resume, id)).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => eprintln!("sandbox {id}: resume failed ({e})"),
-                Err(e) => eprintln!("sandbox {id}: resume join ({e})"),
-            }
-        }
-        let vmm = vmm.clone();
         let root = state.store.root().to_path_buf();
         let _ = tokio::task::spawn_blocking(move || replenish_ready(&vmm, &root)).await;
     });

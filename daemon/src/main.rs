@@ -26,6 +26,7 @@ mod nar;
 mod nix;
 mod pty;
 mod publish;
+mod ready;
 mod resume;
 mod runtime;
 mod sandbox;
