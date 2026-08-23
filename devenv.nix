@@ -26,6 +26,8 @@
 
   processes.snowbox.exec = "cargo run -p snowbox";
 
+  scripts.canvas.exec = "cd canvas && bun install && bun run build";
+
   # Guest runtime is aarch64-linux (NixOS 26.05). On Darwin this goes
   # through linux-builder. The Daemon looks at guest/result or SNOWBOX_RUNTIME.
   scripts.guest.exec = "nix build path:./guest#packages.aarch64-linux.runtime --out-link guest/result";

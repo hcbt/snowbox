@@ -7,6 +7,7 @@ use crate::runtime::Runtime;
 use crate::sandbox::Limits;
 
 pub const AGENT_PORT: u32 = 52;
+pub const SHELL_PORT: u32 = 53;
 
 /// Locally administered unicast MAC derived from the Sandbox id so
 /// concurrent guests do not share an ethernet address.

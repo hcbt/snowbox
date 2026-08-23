@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::auth::require_token;
 use crate::cache::Cache;
+use crate::layout::{Layout, LayoutStore};
 use crate::sandbox::{ActionError, Limits, State as SandboxState, Store};
 use crate::vz::Hypervisor;
 
@@ -21,6 +22,7 @@ pub struct AppState {
     pub token: String,
     pub store: Arc<Store>,
     pub cache: Arc<Cache>,
+    pub layout: Arc<LayoutStore>,
     pub vmm: Option<Arc<Hypervisor>>,
 }
 
@@ -87,6 +89,10 @@ pub fn router(state: AppState) -> Router {
             "/sandboxes/{id}/packages",
             get(list_packages).post(add_package),
         )
+        .route("/layout", get(get_layout).put(put_layout))
+        .route("/sandboxes/{id}/windows", post(open_window))
+        .route("/windows/{id}", axum::routing::delete(close_window))
+        .route("/windows/{id}/pty", get(crate::pty::upgrade))
         .layer(middleware::from_fn_with_state(state.clone(), require_token));
 
     Router::new().nest("/api/v1", v1).with_state(state)
@@ -241,6 +247,38 @@ async fn add_package(
     Ok(Json(serde_json::json!({ "packages": pkgs })))
 }
 
+async fn get_layout(State(state): State<AppState>) -> Json<Layout> {
+    Json(state.layout.get())
+}
+
+async fn put_layout(
+    State(state): State<AppState>,
+    Json(body): Json<Layout>,
+) -> Result<Json<Layout>, (StatusCode, Json<serde_json::Value>)> {
+    Ok(Json(state.layout.put(body).map_err(map_err)?))
+}
+
+async fn open_window(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+    let sandbox = state.store.get(id).map_err(map_err)?;
+    let title = format!("{} — xterm", sandbox.name);
+    let win = state.layout.open_window(id, title).map_err(map_err)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::to_value(win).expect("window json")),
+    ))
+}
+
+async fn close_window(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    state.layout.close_window(id).map_err(map_err)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn boot(
     store: Arc<Store>,
     cache: Arc<Cache>,
@@ -316,7 +354,7 @@ fn action(
     Ok(Json(serde_json::to_value(sandbox).expect("sandbox json")))
 }
 
-fn map_err(err: ActionError) -> (StatusCode, Json<serde_json::Value>) {
+pub(crate) fn map_err(err: ActionError) -> (StatusCode, Json<serde_json::Value>) {
     match err {
         ActionError::NotFound => error_body(StatusCode::NOT_FOUND, "not_found", None),
         ActionError::Conflict(detail) => error_body(StatusCode::CONFLICT, "conflict", Some(detail)),
@@ -358,6 +396,7 @@ mod tests {
             token: "test-token".into(),
             store: Arc::new(Store::open(dir.path()).unwrap()),
             cache: Arc::new(Cache::open(dir.path().join("cache")).unwrap()),
+            layout: Arc::new(LayoutStore::open(dir.path().join("layout.json")).unwrap()),
             vmm: None,
         };
         (dir, state)
@@ -622,6 +661,64 @@ mod tests {
                 .iter()
                 .any(|p| p == "jq")
         );
+    }
+
+    #[tokio::test]
+    async fn cookie_token_is_accepted() {
+        let (_dir, state) = harness();
+        let (status, json) = send(
+            router(state),
+            Request::get("http://127.0.0.1/api/v1/health")
+                .header("Cookie", "snowbox=test-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn layout_windows_persist() {
+        let (_dir, state) = harness();
+        let make = || router(state.clone());
+        let (status, created) = send(
+            make(),
+            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"name":"work"}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = created["id"].as_str().unwrap();
+        let url = format!("http://127.0.0.1/api/v1/sandboxes/{id}/windows");
+        let (status, win) = send(
+            make(),
+            authed(Request::post(&url)).body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(win["sandbox"], id);
+        let wid = win["id"].as_str().unwrap();
+
+        let (status, layout) = send(
+            make(),
+            authed(Request::get("http://127.0.0.1/api/v1/layout"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(layout["windows"].as_array().unwrap().len(), 1);
+
+        let del = format!("http://127.0.0.1/api/v1/windows/{wid}");
+        let (status, _) = send(
+            make(),
+            authed(Request::delete(&del)).body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]

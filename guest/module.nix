@@ -119,6 +119,30 @@
     };
   };
 
+  # Window shells. The Daemon bridges a Host WebSocket to this vsock;
+  # the browser never talks to the guest. Each connect is a login shell
+  # for snow (closing the Window ends that shell).
+  systemd.services.snowbox-shell = {
+    description = "Snowbox Window shells";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "local-fs.target" ];
+    serviceConfig = {
+      ExecStart = "${pkgs.socat}/bin/socat VSOCK-LISTEN:53,reuseaddr,fork EXEC:${lib.getExe config.system.build.snowbox-shell},pty,stderr,setsid,sigint,sane,ctty";
+      Restart = "always";
+    };
+  };
+
+  system.build.snowbox-shell = pkgs.writeShellApplication {
+    name = "snowbox-shell";
+    runtimeInputs = [
+      pkgs.util-linux
+      pkgs.bash
+    ];
+    text = ''
+      exec runuser -u snow -- ${pkgs.bash}/bin/bash -l
+    '';
+  };
+
   system.build.snowbox-agent = pkgs.writeShellApplication {
     name = "snowbox-agent";
     runtimeInputs = [

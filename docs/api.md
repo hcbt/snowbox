@@ -72,3 +72,38 @@ Sandbox object:
 List is `{"sandboxes":[...]}`.
 
 Errors: `{"error":"<code>"}` with optional `"detail"`. Codes: `unauthorized`, `not_found`, `conflict`, `bad_request`, `internal`.
+
+Same-origin Canvas requests may send the token as cookie `snowbox` instead of `Authorization`. The Daemon sets that cookie on every response.
+
+## Layout and Windows
+
+The Canvas is a client of this API. Layout is Host-side JSON the Daemon persists. Closing the browser does not forget it. A Window is a shell the Daemon owns; PTY bytes travel on a WebSocket to the Daemon, which bridges vsock into the guest.
+
+| Method | Path | Meaning |
+| --- | --- | --- |
+| `GET` | `/layout` | Windows and Icon Manager. |
+| `PUT` | `/layout` | Replace Layout (geometry, iconify, Icon Manager). |
+| `POST` | `/sandboxes/{id}/windows` | Open a Window on that Sandbox. `201` |
+| `DELETE` | `/windows/{id}` | Close. Ends that shell. `204` |
+| `GET` | `/windows/{id}/pty` | WebSocket. Binary PTY I/O. `409` if the Sandbox is not running. |
+
+Layout object:
+
+```json
+{
+  "windows": [
+    {
+      "id": "…",
+      "sandbox": "…",
+      "title": "work — xterm",
+      "x": 40,
+      "y": 40,
+      "w": 640,
+      "h": 400,
+      "z": 1,
+      "iconified": false
+    }
+  ],
+  "icon_manager": { "x": 8, "y": 8, "visible": true }
+}
+```

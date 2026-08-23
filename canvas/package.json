@@ -1,0 +1,23 @@
+{
+  "name": "snowbox-canvas",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@solidjs/web": "2.0.0-rc.1",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "solid-js": "2.0.0-rc.1"
+  },
+  "devDependencies": {
+    "@solidjs/vite-plugin": "3.0.0-next.32",
+    "@tailwindcss/vite": "4.3.3",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.2.2"
+  }
+}

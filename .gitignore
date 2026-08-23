@@ -6,3 +6,5 @@ target
 *.img
 .pre-commit-config.yaml
 devenv.local.nix
+canvas/node_modules
+canvas/dist

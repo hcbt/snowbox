@@ -1,0 +1,23 @@
+@layer theme, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@theme {
+  --color-twm: #c3366d;
+  --color-twm-hi: #db4a82;
+  --color-twm-head: #cfcfcf;
+  --color-twm-line: #7a1e44;
+  --color-twm-muted: #e7a0bb;
+  --font-twm: Helvetica, Arial, "Lucida Grande", sans-serif;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    @apply m-0 h-full overflow-hidden bg-black font-twm text-[13px] text-white;
+    font-smooth: never;
+    -webkit-font-smoothing: none;
+    user-select: none;
+  }
+}
