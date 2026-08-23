@@ -466,6 +466,11 @@ fn boot_claimed(
         }
     }
     eprintln!("sandbox {id}: agent {}ms", t1.elapsed().as_millis());
+    if dir.join(crate::vmm::HATCHED).is_file() {
+        let _ = crate::agent::reset_dir(vmm, id, "/workspace");
+        let _ = crate::agent::reset_dir(vmm, id, "/home/snow");
+        let _ = std::fs::remove_file(dir.join(crate::vmm::HATCHED));
+    }
     crate::agent::tar_in(vmm, id, "/workspace", &dir.join("workspace"))
         .map_err(ActionError::Failed)?;
     let _ = crate::agent::tar_in(vmm, id, "/home/snow", &dir.join("home"));

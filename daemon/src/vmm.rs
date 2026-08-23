@@ -8,7 +8,6 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::disk;
-use crate::environment;
 use crate::runtime::Runtime;
 use crate::sandbox::Limits;
 
@@ -169,54 +168,68 @@ pub fn pump_main_run_loop() {
     std::thread::park();
 }
 
-fn ready_key(fp: &str, runtime: &Path) -> String {
+pub(crate) const HATCHED: &str = "hatched.ready";
+
+fn ready_key(runtime: &Path) -> String {
+    let p = runtime
+        .canonicalize()
+        .unwrap_or_else(|_| runtime.to_path_buf());
     let mut h = 2166136261u64;
-    for part in [fp.as_bytes(), runtime.as_os_str().as_encoded_bytes()] {
-        for b in part {
-            h ^= u64::from(*b);
-            h = h.wrapping_mul(16777619);
-        }
+    for b in p.as_os_str().as_encoded_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(16777619);
     }
     format!("{h:016x}")
 }
 
-fn ready_dir(sandbox_dir: &Path, fp: &str, runtime: &Path) -> PathBuf {
+fn ready_dir(sandbox_dir: &Path, runtime: &Path) -> PathBuf {
     sandbox_dir
         .parent()
         .unwrap_or(sandbox_dir)
         .join(".ready")
-        .join(ready_key(fp, runtime))
+        .join(ready_key(runtime))
+}
+
+fn snapshot_complete(dir: &Path) -> bool {
+    dir.join(SAVE_NAME).is_file()
+        && dir.join("root.raw").is_file()
+        && dir.join("machine.ident").is_file()
 }
 
 fn install_ready(sandbox_dir: &Path, runtime: &Path) {
-    let Ok(fp) = environment::fingerprint(sandbox_dir) else {
+    let ready = ready_dir(sandbox_dir, runtime);
+    if !snapshot_complete(&ready) {
         return;
-    };
-    let ready = ready_dir(sandbox_dir, &fp, runtime);
-    let src_save = ready.join(SAVE_NAME);
-    let src_disk = ready.join("root.raw");
-    let src_ident = ready.join("machine.ident");
-    if !(src_save.is_file() && src_disk.is_file() && src_ident.is_file()) {
+    }
+    // Consume the snapshot so a second New Sandbox cannot restore the
+    // same Apple machine identifier while the first is running.
+    let taking = ready.with_extension("taking");
+    let _ = std::fs::remove_dir_all(&taking);
+    if std::fs::rename(&ready, &taking).is_err() {
         return;
     }
     let disk_dir = sandbox_dir.join("disk");
     let dst_disk = disk_dir.join("root.raw");
     if let Err(e) = std::fs::create_dir_all(&disk_dir) {
         eprintln!("ready snapshot: mkdir disk: {e}");
+        let _ = std::fs::rename(&taking, &ready);
         return;
     }
     if !dst_disk.exists() {
-        if let Err(e) = disk::clone_file(&src_disk, &dst_disk) {
+        if let Err(e) = disk::clone_file(&taking.join("root.raw"), &dst_disk) {
             eprintln!("ready snapshot: clone disk: {e}");
+            let _ = std::fs::rename(&taking, &ready);
             return;
         }
     }
     for name in [SAVE_NAME, "machine.ident", "mac.id", "environment.applied"] {
-        let src = ready.join(name);
+        let src = taking.join(name);
         if src.is_file() {
             let _ = std::fs::copy(&src, sandbox_dir.join(name));
         }
     }
+    let _ = std::fs::write(sandbox_dir.join(HATCHED), b"");
+    let _ = std::fs::remove_dir_all(&taking);
 }
 
 fn bake_ready(sandbox_dir: &Path, runtime: &Path) {
@@ -226,13 +239,7 @@ fn bake_ready(sandbox_dir: &Path, runtime: &Path) {
     if !(src_save.is_file() && src_disk.is_file() && src_ident.is_file()) {
         return;
     }
-    let Ok(fp) = environment::fingerprint(sandbox_dir) else {
-        return;
-    };
-    let dest = ready_dir(sandbox_dir, &fp, runtime);
-    if dest.join(SAVE_NAME).is_file() {
-        return;
-    }
+    let dest = ready_dir(sandbox_dir, runtime);
     let tmp = dest.with_extension("tmp");
     let _ = std::fs::remove_dir_all(&tmp);
     if let Err(e) = std::fs::create_dir_all(&tmp) {
@@ -483,12 +490,16 @@ mod tests {
 
         let b = dir.path().join("b");
         crate::environment::write_default(&b).unwrap();
+        // Different Packages must not force a cold boot; the snapshot is
+        // the guest runtime, and Environment is applied after restore.
+        std::fs::write(b.join("environment/packages.json"), r#"["hello"]"#).unwrap();
         let id = Uuid::from_u128(6);
         assert_eq!(hv.start(id, &b, limits()).unwrap(), StartKind::Restored);
         assert_eq!(*fake.restores.lock().unwrap(), vec![id]);
         assert!(fake.boots.lock().unwrap().is_empty());
         assert!(b.join(SAVE_NAME).is_file());
         assert!(b.join("disk").join("root.raw").is_file());
+        assert!(!ready_dir(&a, &rt.rootfs).exists());
     }
 
     #[test]
@@ -505,8 +516,37 @@ mod tests {
         let save = sb.join(SAVE_NAME);
         std::fs::write(&save, b"save").unwrap();
         hv.save_and_stop(Uuid::from_u128(7), &save).unwrap();
-        let fp = crate::environment::fingerprint(&sb).unwrap();
-        assert!(ready_dir(&sb, &fp, &rt.rootfs).join(SAVE_NAME).is_file());
+        assert!(ready_dir(&sb, &rt.rootfs).join(SAVE_NAME).is_file());
+    }
+
+    #[test]
+    fn ready_snapshot_is_consumed_so_a_second_hatch_boots() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(dir.path());
+        let fake = Fake::new();
+        let hv = Hypervisor::wrap(rt.clone(), fake.clone());
+        let a = dir.path().join("a");
+        crate::environment::write_default(&a).unwrap();
+        std::fs::create_dir_all(a.join("disk")).unwrap();
+        std::fs::write(a.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
+        std::fs::write(a.join(SAVE_NAME), b"save").unwrap();
+        std::fs::write(a.join("machine.ident"), b"ident").unwrap();
+        bake_ready(&a, &rt.rootfs);
+
+        let b = dir.path().join("b");
+        crate::environment::write_default(&b).unwrap();
+        assert_eq!(
+            hv.start(Uuid::from_u128(9), &b, limits()).unwrap(),
+            StartKind::Restored
+        );
+
+        let c = dir.path().join("c");
+        crate::environment::write_default(&c).unwrap();
+        assert_eq!(
+            hv.start(Uuid::from_u128(10), &c, limits()).unwrap(),
+            StartKind::Cold
+        );
+        assert_eq!(*fake.boots.lock().unwrap(), vec![Uuid::from_u128(10)]);
     }
 
     #[test]

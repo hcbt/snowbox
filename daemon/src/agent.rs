@@ -139,6 +139,26 @@ pub fn profile(vmm: &impl Control, id: Uuid, store_path: &str) -> Result<(), Str
     }
 }
 
+pub fn reset_dir(vmm: &impl Control, id: Uuid, dest: &str) -> Result<(), String> {
+    let mut stream = vmm.vsock(id, AGENT_PORT)?;
+    let header = format!("RESET {dest}\n");
+    stream
+        .write_all(header.as_bytes())
+        .map_err(|e| format!("reset write: {e}"))?;
+    stream
+        .shutdown(std::net::Shutdown::Write)
+        .map_err(|e| format!("reset shutdown: {e}"))?;
+    let mut reply = String::new();
+    stream
+        .read_to_string(&mut reply)
+        .map_err(|e| format!("reset reply: {e}"))?;
+    if reply.contains("OK") {
+        Ok(())
+    } else {
+        Err(format!("reset: {reply}"))
+    }
+}
+
 pub fn winsize(vmm: &impl Control, id: Uuid, cols: u16, rows: u16) -> Result<(), String> {
     let mut stream = vmm.vsock(id, AGENT_PORT)?;
     let header = format!("STTY {rows}x{cols}\n");
@@ -184,6 +204,19 @@ mod tests {
             b.write_all(b"PONG\n").unwrap();
         });
         ping(&Pair(a), Uuid::nil()).unwrap();
+    }
+
+    #[test]
+    fn reset_dir_sends_reset() {
+        let (a, b) = UnixStream::pair().unwrap();
+        thread::spawn(move || {
+            let mut b = b;
+            let mut buf = [0u8; 32];
+            let n = b.read(&mut buf).unwrap();
+            assert_eq!(&buf[..n], b"RESET /workspace\n");
+            b.write_all(b"OK\n").unwrap();
+        });
+        reset_dir(&Pair(a), Uuid::nil(), "/workspace").unwrap();
     }
 
     #[test]

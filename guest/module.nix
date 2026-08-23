@@ -190,6 +190,16 @@
           ln -sfn "$arg" /nix/var/nix/profiles/snowbox-environment
           printf 'OK\n'
           ;;
+        RESET)
+          mkdir -p "$arg"
+          shopt -s dotglob nullglob
+          entries=("$arg"/*)
+          if (( ''${#entries[@]} )); then
+            rm -rf -- "''${entries[@]}"
+          fi
+          chown snow:snow "$arg" 2>/dev/null || true
+          printf 'OK\n'
+          ;;
         STTY)
           rows=''${arg%%x*}
           cols=''${arg##*x}
