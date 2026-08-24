@@ -8,7 +8,21 @@ pub fn prepare_root_disk(
     runtime_rootfs: &Path,
     disk: u64,
 ) -> Result<PathBuf, String> {
-    prepare_disk(sandbox_dir, runtime_rootfs, None, disk)
+    prepare_disk(sandbox_dir, runtime_rootfs, None, disk, true)
+}
+
+/// Same as [`prepare_root_disk`] but does not `set_len`. Growing the
+/// sparse file before restore breaks snapshot identity; grow after.
+pub fn prepare_root_disk_for_restore(
+    sandbox_dir: &Path,
+    runtime_rootfs: &Path,
+    disk: u64,
+) -> Result<PathBuf, String> {
+    prepare_disk(sandbox_dir, runtime_rootfs, None, disk, false)
+}
+
+pub fn grow_root_disk(sandbox_dir: &Path, disk: u64) -> Result<(), String> {
+    apply_disk_limit(&sandbox_dir.join("disk").join("root.raw"), disk, true)
 }
 
 pub(crate) fn prepare_disk(
@@ -16,6 +30,7 @@ pub(crate) fn prepare_disk(
     runtime_rootfs: &Path,
     booted_template: Option<&Path>,
     disk: u64,
+    grow: bool,
 ) -> Result<PathBuf, String> {
     let disk_dir = sandbox_dir.join("disk");
     std::fs::create_dir_all(&disk_dir).map_err(|e| format!("mkdir disk: {e}"))?;
@@ -48,7 +63,12 @@ pub(crate) fn prepare_disk(
     #[allow(clippy::permissions_set_readonly_false)]
     perms.set_readonly(false);
     std::fs::set_permissions(&root, perms).map_err(|e| format!("chmod rootfs: {e}"))?;
-    let len = std::fs::metadata(&root)
+    apply_disk_limit(&root, disk, grow)?;
+    Ok(root)
+}
+
+fn apply_disk_limit(root: &Path, disk: u64, grow: bool) -> Result<(), String> {
+    let len = std::fs::metadata(root)
         .map_err(|e| format!("stat disk: {e}"))?
         .len();
     if len > disk {
@@ -56,14 +76,14 @@ pub(crate) fn prepare_disk(
             "disk image ({len} bytes) exceeds Limit ({disk} bytes)"
         ));
     }
-    if len < disk {
+    if grow && len < disk {
         let file = std::fs::OpenOptions::new()
             .write(true)
-            .open(&root)
+            .open(root)
             .map_err(|e| format!("open disk: {e}"))?;
         file.set_len(disk).map_err(|e| format!("grow disk: {e}"))?;
     }
-    Ok(root)
+    Ok(())
 }
 
 fn ensure_runtime_template(src: &Path, template: &Path) -> Result<(), String> {
@@ -186,7 +206,21 @@ mod tests {
         let booted = dir.path().join("booted.raw");
         std::fs::write(&src, b"unbooted").unwrap();
         std::fs::write(&booted, b"booted!!").unwrap();
-        let root = prepare_disk(&dir.path().join("sb"), &src, Some(&booted), 64).unwrap();
+        let root = prepare_disk(&dir.path().join("sb"), &src, Some(&booted), 64, true).unwrap();
         assert_eq!(&std::fs::read(&root).unwrap()[..8], b"booted!!");
+    }
+
+    #[test]
+    fn prepare_root_disk_for_restore_does_not_grow() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("runtime.raw");
+        std::fs::write(&src, vec![0u8; 64]).unwrap();
+        let sandbox = dir.path().join("sb");
+        std::fs::create_dir_all(sandbox.join("disk")).unwrap();
+        std::fs::write(sandbox.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
+        let root = prepare_root_disk_for_restore(&sandbox, &src, 256).unwrap();
+        assert_eq!(std::fs::metadata(&root).unwrap().len(), 64);
+        grow_root_disk(&sandbox, 256).unwrap();
+        assert_eq!(std::fs::metadata(&root).unwrap().len(), 256);
     }
 }

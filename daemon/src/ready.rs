@@ -7,6 +7,15 @@ struct Gate {
     busy: bool,
 }
 
+struct BusyGuard;
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        GATE.lock().expect("ready gate").busy = false;
+        CV.notify_all();
+    }
+}
+
 static GATE: Mutex<Gate> = Mutex::new(Gate { busy: false });
 static CV: Condvar = Condvar::new();
 
@@ -22,10 +31,8 @@ pub fn ensure(exists: impl Fn() -> bool, warm: impl Fn() -> Result<(), String>) 
         }
         g.busy = true;
         drop(g);
-        let result = warm();
-        GATE.lock().expect("ready gate").busy = false;
-        CV.notify_all();
-        if let Err(e) = result {
+        let _guard = BusyGuard;
+        if let Err(e) = warm() {
             eprintln!("ready snapshot: warm failed ({e})");
             return;
         }
@@ -82,5 +89,31 @@ mod tests {
         });
         assert!(exists.load(Ordering::SeqCst));
         assert_eq!(warms.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn ensure_clears_busy_when_warm_panics() {
+        let panicked = AtomicBool::new(false);
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ensure(
+                || false,
+                || {
+                    panicked.store(true, Ordering::SeqCst);
+                    panic!("warm boom");
+                },
+            );
+        }));
+        assert!(caught.is_err());
+        assert!(panicked.load(Ordering::SeqCst));
+
+        let ran = AtomicBool::new(false);
+        ensure(
+            || ran.load(Ordering::SeqCst),
+            || {
+                ran.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+        assert!(ran.load(Ordering::SeqCst));
     }
 }
