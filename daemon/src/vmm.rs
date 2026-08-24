@@ -201,10 +201,23 @@ fn snapshot_complete(dir: &Path) -> bool {
         && dir.join("machine.ident").is_file()
 }
 
+fn snapshot_matches_runtime(dir: &Path, runtime: &Path) -> bool {
+    let current = runtime
+        .canonicalize()
+        .unwrap_or_else(|_| runtime.to_path_buf());
+    let stamped = std::fs::read_to_string(dir.join("runtime.src")).unwrap_or_default();
+    stamped.trim() == current.to_string_lossy()
+}
+
 fn install_ready(sandbox_dir: &Path, runtime: &Path) {
     let ready = ready_dir(sandbox_dir, runtime);
     if !snapshot_complete(&ready) {
         eprintln!("ready snapshot: none");
+        return;
+    }
+    if !snapshot_matches_runtime(&ready, runtime) {
+        eprintln!("ready snapshot: stale userspace; dropping");
+        let _ = std::fs::remove_dir_all(&ready);
         return;
     }
     // Consume the snapshot so a second New Sandbox cannot restore the
@@ -228,7 +241,13 @@ fn install_ready(sandbox_dir: &Path, runtime: &Path) {
             return;
         }
     }
-    for name in [SAVE_NAME, "machine.ident", "mac.id", "environment.applied"] {
+    for name in [
+        SAVE_NAME,
+        "machine.ident",
+        "mac.id",
+        "environment.applied",
+        "runtime.src",
+    ] {
         let src = taking.join(name);
         if src.is_file() {
             let _ = std::fs::copy(&src, sandbox_dir.join(name));
@@ -273,6 +292,7 @@ fn bake_ready(sandbox_dir: &Path, runtime: &Path) {
             sandbox_dir.join("environment.applied").as_path(),
             "environment.applied",
         ),
+        (sandbox_dir.join("runtime.src").as_path(), "runtime.src"),
     ] {
         if src.is_file() {
             let _ = std::fs::copy(src, tmp.join(name));
@@ -619,6 +639,32 @@ mod tests {
         assert_eq!(hv.start(id, &b, limits()).unwrap(), StartKind::Cold);
         assert!(fake.restores.lock().unwrap().is_empty());
         assert_eq!(*fake.boots.lock().unwrap(), vec![id]);
+    }
+
+    #[test]
+    fn ready_snapshot_without_runtime_stamp_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(dir.path());
+        let fake = Fake::new();
+        let hv = Hypervisor::wrap(rt.clone(), fake.clone());
+        let a = dir.path().join("a");
+        crate::environment::write_default(&a).unwrap();
+        std::fs::create_dir_all(a.join("disk")).unwrap();
+        std::fs::write(a.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
+        std::fs::write(a.join(SAVE_NAME), b"save").unwrap();
+        std::fs::write(a.join("machine.ident"), b"ident").unwrap();
+        stamp_runtime(&a, &rt.rootfs);
+        bake_ready(&a, &rt.rootfs);
+        let ready = ready_dir(&a, &rt.rootfs);
+        std::fs::remove_file(ready.join("runtime.src")).unwrap();
+
+        let b = dir.path().join("b");
+        crate::environment::write_default(&b).unwrap();
+        let id = Uuid::from_u128(14);
+        assert_eq!(hv.start(id, &b, limits()).unwrap(), StartKind::Cold);
+        assert!(fake.restores.lock().unwrap().is_empty());
+        assert_eq!(*fake.boots.lock().unwrap(), vec![id]);
+        assert!(!ready.exists());
     }
 
     #[test]

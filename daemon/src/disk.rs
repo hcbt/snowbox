@@ -34,6 +34,13 @@ pub(crate) fn prepare_disk(
             ensure_runtime_template(runtime_rootfs, &template)?;
             clone_or_copy(&template, &root)?;
         }
+        let key = runtime_rootfs
+            .canonicalize()
+            .unwrap_or_else(|_| runtime_rootfs.to_path_buf());
+        let _ = std::fs::write(
+            sandbox_dir.join("runtime.src"),
+            key.to_string_lossy().as_bytes(),
+        );
     }
     let mut perms = std::fs::metadata(&root)
         .map_err(|e| format!("stat rootfs: {e}"))?
@@ -56,10 +63,6 @@ pub(crate) fn prepare_disk(
             .map_err(|e| format!("open disk: {e}"))?;
         file.set_len(disk).map_err(|e| format!("grow disk: {e}"))?;
     }
-    let key = runtime_rootfs
-        .canonicalize()
-        .unwrap_or_else(|_| runtime_rootfs.to_path_buf());
-    let _ = std::fs::write(sandbox_dir.join("runtime.src"), key.to_string_lossy().as_bytes());
     Ok(root)
 }
 
