@@ -17,6 +17,8 @@ let
       nix build path:./guest#packages.${guestSystem}.runtime --out-link guest/result
     fi
     ( cd canvas && bun install && bun run build )
+    cargo build -p snowbox-eval
+    export SNOWBOX_EVAL="$PWD/target/debug/snowbox-eval"
     export SNOWBOX_RUNTIME="$PWD/guest/result"
     exec cargo run -p snowbox
   '';

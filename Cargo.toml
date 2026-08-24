@@ -1,5 +1,5 @@
 [workspace]
-members = ["daemon"]
+members = ["daemon", "eval"]
 resolver = "3"
 
 [workspace.package]

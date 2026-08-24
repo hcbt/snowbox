@@ -16,6 +16,7 @@ mod disk;
 mod environment;
 mod kvm;
 mod layout;
+#[cfg(test)]
 mod nar;
 mod nix;
 mod pty;

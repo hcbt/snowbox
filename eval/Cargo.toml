@@ -1,0 +1,21 @@
+[package]
+name = "snowbox-eval"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+description = "Nix C API helper for the Snowbox Daemon"
+
+[[bin]]
+name = "snowbox-eval"
+path = "src/main.rs"
+
+[dependencies]
+nix-bindings-expr = { git = "https://github.com/nixops4/nix-bindings-rust" }
+nix-bindings-flake = { git = "https://github.com/nixops4/nix-bindings-rust" }
+nix-bindings-store = { git = "https://github.com/nixops4/nix-bindings-rust" }
+nix-bindings-util = { git = "https://github.com/nixops4/nix-bindings-rust" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

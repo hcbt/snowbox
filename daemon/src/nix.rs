@@ -1,15 +1,14 @@
-//! Realize an Environment flake through nix-bindings. Copy is NAR dump
-//! (nixops4 has no copy_closure).
+//! posix_spawn client for `snowbox-eval`. This crate must not link
+//! nix-bindings / libgc (ADR 0019).
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
-use nix_bindings_expr::eval_state::{self, EvalStateBuilder, gc_register_my_thread};
-use nix_bindings_flake::{EvalStateBuilderExt, FlakeSettings};
-use nix_bindings_store::store::Store as NixStore;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::cache::Cache;
-use crate::nar;
 use crate::sandbox::ActionError;
 
 pub struct Realized {
@@ -17,6 +16,62 @@ pub struct Realized {
     pub export: Vec<u8>,
 }
 
+/// JSON-line protocol with snowbox-eval. Keep fields in sync with
+/// `eval/src/protocol.rs`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(tag = "op", rename_all = "snake_case")]
+enum Request {
+    EvalString {
+        expr: String,
+        origin: String,
+    },
+    Realize {
+        flake_dir: PathBuf,
+        work_dir: PathBuf,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+struct Response {
+    ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    out_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    export_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    nars: Vec<NarFile>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct NarFile {
+    store_path: String,
+    nar_path: PathBuf,
+    #[serde(default)]
+    references: Vec<String>,
+}
+
+struct WorkDir(PathBuf);
+
+impl WorkDir {
+    fn new() -> Result<Self, ActionError> {
+        let dir = std::env::temp_dir().join(format!("snowbox-eval-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("nars"))
+            .map_err(|e| ActionError::Failed(e.to_string()))?;
+        Ok(Self(dir))
+    }
+}
+
+impl Drop for WorkDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[allow(dead_code)]
 pub(crate) fn path_flake_url_pub(path: &Path) -> Result<String, ActionError> {
     let path = path
         .canonicalize()
@@ -24,24 +79,14 @@ pub(crate) fn path_flake_url_pub(path: &Path) -> Result<String, ActionError> {
     Ok(path_flake_url(&path))
 }
 
+#[allow(dead_code)]
 pub(crate) fn eval_string(expr: &str, origin: &str) -> Result<String, ActionError> {
-    let _eval = EVAL.lock().map_err(|_| ActionError::Internal)?;
-    eval_state::init().map_err(|e| ActionError::Failed(e.to_string()))?;
-    let _gc = gc_register_my_thread().map_err(|e| ActionError::Failed(e.to_string()))?;
-    let _ = nix_bindings_util::settings::set("experimental-features", "nix-command flakes");
-    let store = NixStore::open(None, []).map_err(|e| ActionError::Failed(e.to_string()))?;
-    let flake_settings = FlakeSettings::new().map_err(|e| ActionError::Failed(e.to_string()))?;
-    let mut es = EvalStateBuilder::new(store)
-        .map_err(|e| ActionError::Failed(e.to_string()))?
-        .flakes(&flake_settings)
-        .map_err(|e| ActionError::Failed(e.to_string()))?
-        .build()
-        .map_err(|e| ActionError::Failed(e.to_string()))?;
-    let value = es
-        .eval_from_string(expr, origin)
-        .map_err(|e| ActionError::Failed(format!("eval: {e}")))?;
-    es.require_string(&value)
-        .map_err(|e| ActionError::Failed(format!("eval string: {e}")))
+    let resp = call(&Request::EvalString {
+        expr: expr.to_string(),
+        origin: origin.to_string(),
+    })?;
+    resp.value
+        .ok_or_else(|| ActionError::Failed("snowbox-eval returned no string".into()))
 }
 
 fn path_flake_url(path: &Path) -> String {
@@ -59,150 +104,92 @@ fn path_flake_url(path: &Path) -> String {
     enc
 }
 
-pub(crate) static EVAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 pub fn realize_environment(flake_dir: &Path, cache: &Cache) -> Result<Realized, ActionError> {
-    let _realize = EVAL.lock().map_err(|_| ActionError::Internal)?;
-    eval_state::init().map_err(|e| ActionError::Failed(e.to_string()))?;
-    let _gc = gc_register_my_thread().map_err(|e| ActionError::Failed(e.to_string()))?;
-    let _ = nix_bindings_util::settings::set("experimental-features", "nix-command flakes");
-
-    let store = NixStore::open(None, []).map_err(|e| ActionError::Failed(e.to_string()))?;
-    let flake_settings = FlakeSettings::new().map_err(|e| ActionError::Failed(e.to_string()))?;
-    let mut es = EvalStateBuilder::new(store.clone())
-        .map_err(|e| ActionError::Failed(e.to_string()))?
-        .flakes(&flake_settings)
-        .map_err(|e| ActionError::Failed(e.to_string()))?
-        .build()
-        .map_err(|e| ActionError::Failed(e.to_string()))?;
-
-    let flake_path = flake_dir
-        .canonicalize()
-        .map_err(|e| ActionError::Failed(e.to_string()))?;
-    let flake_url = path_flake_url(&flake_path);
-    let expr =
-        format!("\"${{(builtins.getFlake ''{flake_url}'').packages.aarch64-linux.default}}\"");
-    let value = es
-        .eval_from_string(&expr, "<snowbox-environment>")
-        .map_err(|e| ActionError::Failed(format!("eval environment: {e}")))?;
-    let realised = es
-        .realise_string(&value, false)
-        .map_err(|e| ActionError::Failed(format!("realise environment: {e}")))?;
-    let out_path = realised.s.trim().to_string();
-    if !out_path.starts_with("/nix/store/") {
-        return Err(ActionError::Failed(format!(
-            "environment did not realise to a store path: {out_path}"
-        )));
-    }
-
-    let mut store = es.store().clone();
-    let root = store
-        .parse_store_path(&out_path)
-        .map_err(|e| ActionError::Failed(e.to_string()))?;
-    let closure = store
-        .get_fs_closure(&root, false, false, false)
-        .map_err(|e| ActionError::Failed(e.to_string()))?;
-
-    let mut refs: HashMap<String, Vec<String>> = HashMap::new();
-    for p in &closure {
-        let rp = store
-            .real_path(p)
-            .map_err(|e| ActionError::Failed(e.to_string()))?;
-        let close = store
-            .get_fs_closure(p, false, false, false)
-            .map_err(|e| ActionError::Failed(e.to_string()))?;
-        let mut r = Vec::new();
-        for c in close {
-            let cr = store
-                .real_path(&c)
-                .map_err(|e| ActionError::Failed(e.to_string()))?;
-            if cr != rp {
-                r.push(cr);
-            }
-        }
-        refs.insert(rp, r);
-    }
-
-    let order = topo(&refs)?;
-    let mut export = Vec::new();
-    for path in &order {
-        let disk = PathBuf::from(path);
-        let nar_bytes = nar::dump_path(&disk).map_err(|e| ActionError::Failed(e.to_string()))?;
+    let work = WorkDir::new()?;
+    let resp = call(&Request::Realize {
+        flake_dir: flake_dir.to_path_buf(),
+        work_dir: work.0.clone(),
+    })?;
+    for nar in &resp.nars {
+        let bytes = std::fs::read(&nar.nar_path).map_err(|e| {
+            ActionError::Failed(format!("read NAR {}: {e}", nar.nar_path.display()))
+        })?;
         cache
-            .put_nar(path, &nar_bytes)
+            .put_nar(&nar.store_path, &bytes, &nar.references)
             .map_err(|e| ActionError::Failed(e.to_string()))?;
-        let framed = nar::export_path(
-            path,
-            &nar_bytes,
-            refs.get(path).map(|v| v.as_slice()).unwrap_or(&[]),
-        )
-        .map_err(|e| ActionError::Failed(e.to_string()))?;
-        export.extend_from_slice(&framed);
     }
-    export.extend_from_slice(&nar::export_end());
+    let export_path = resp
+        .export_path
+        .clone()
+        .unwrap_or_else(|| work.0.join("export"));
+    let export = std::fs::read(&export_path)
+        .map_err(|e| ActionError::Failed(format!("read export {}: {e}", export_path.display())))?;
+    let out_path = resp
+        .out_path
+        .ok_or_else(|| ActionError::Failed("snowbox-eval returned no out_path".into()))?;
     Ok(Realized { out_path, export })
 }
 
-fn topo(refs: &HashMap<String, Vec<String>>) -> Result<Vec<String>, ActionError> {
-    // path depends on its references: refs must come first
-    let mut indeg: HashMap<String, usize> = HashMap::new();
-    let mut rev: HashMap<String, Vec<String>> = HashMap::new();
-    for (p, rs) in refs {
-        indeg.entry(p.clone()).or_insert(0);
-        for r in rs {
-            indeg.entry(r.clone()).or_insert(0);
-            *indeg.entry(p.clone()).or_insert(0) += 1;
-            rev.entry(r.clone()).or_default().push(p.clone());
-        }
+fn eval_bin() -> Result<PathBuf, ActionError> {
+    if let Some(p) = std::env::var_os("SNOWBOX_EVAL") {
+        return Ok(PathBuf::from(p));
     }
-    let mut q: VecDeque<String> = indeg
-        .iter()
-        .filter(|(_, n)| **n == 0)
-        .map(|(k, _)| k.clone())
-        .collect();
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    while let Some(n) = q.pop_front() {
-        if !seen.insert(n.clone()) {
-            continue;
-        }
-        out.push(n.clone());
-        if let Some(children) = rev.get(&n) {
-            for c in children {
-                if let Some(d) = indeg.get_mut(c) {
-                    *d = d.saturating_sub(1);
-                    if *d == 0 {
-                        q.push_back(c.clone());
-                    }
-                }
-            }
-        }
+    let exe = std::env::current_exe().map_err(|e| ActionError::Failed(e.to_string()))?;
+    let candidate = exe
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("snowbox-eval");
+    if candidate.is_file() {
+        return Ok(candidate);
     }
-    if out.len() != refs.len() {
-        // cycle or missing: emit remaining in arbitrary order
-        for k in refs.keys() {
-            if !seen.contains(k) {
-                out.push(k.clone());
-            }
-        }
+    Err(ActionError::Failed(format!(
+        "snowbox-eval not found (set SNOWBOX_EVAL or cargo build -p snowbox-eval); looked at {}",
+        candidate.display()
+    )))
+}
+
+/// `std::process::Command` on macOS is posix_spawn. Do not libc::fork.
+fn call(req: &Request) -> Result<Response, ActionError> {
+    call_bin(&eval_bin()?, req)
+}
+
+fn call_bin(bin: &Path, req: &Request) -> Result<Response, ActionError> {
+    let mut child = Command::new(bin)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| ActionError::Failed(format!("spawn snowbox-eval ({}): {e}", bin.display())))?;
+    {
+        let mut stdin = child.stdin.take().ok_or(ActionError::Internal)?;
+        let mut line = serde_json::to_vec(req).map_err(|_| ActionError::Internal)?;
+        line.push(b'\n');
+        stdin
+            .write_all(&line)
+            .map_err(|e| ActionError::Failed(e.to_string()))?;
     }
-    Ok(out)
+    let out = child
+        .wait_with_output()
+        .map_err(|e| ActionError::Failed(e.to_string()))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout.lines().next().unwrap_or("");
+    let resp: Response = serde_json::from_str(line).map_err(|_| {
+        ActionError::Failed(format!(
+            "snowbox-eval: bad stdout (status {:?}): {line}",
+            out.status.code()
+        ))
+    })?;
+    if !resp.ok {
+        return Err(ActionError::Failed(
+            resp.error.unwrap_or_else(|| "snowbox-eval failed".into()),
+        ));
+    }
+    Ok(resp)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn topo_puts_deps_first() {
-        let mut refs = HashMap::new();
-        refs.insert("a".into(), vec!["b".into()]);
-        refs.insert("b".into(), vec![]);
-        let order = topo(&refs).unwrap();
-        let b = order.iter().position(|x| x == "b").unwrap();
-        let a = order.iter().position(|x| x == "a").unwrap();
-        assert!(b < a);
-    }
 
     #[test]
     fn path_flake_url_encodes_spaces() {
@@ -211,5 +198,85 @@ mod tests {
             path_flake_url(p),
             "path:/Users/me/Application%20Support/snowbox/environment"
         );
+    }
+
+    #[test]
+    fn request_is_one_json_line() {
+        let req = Request::EvalString {
+            expr: "\"hi\"".into(),
+            origin: "<t>".into(),
+        };
+        let line = serde_json::to_string(&req).unwrap();
+        assert!(!line.contains('\n'));
+        assert_eq!(
+            line,
+            r#"{"op":"eval_string","expr":"\"hi\"","origin":"<t>"}"#
+        );
+        let back: Request = serde_json::from_str(&line).unwrap();
+        match back {
+            Request::EvalString { expr, origin } => {
+                assert_eq!(expr, "\"hi\"");
+                assert_eq!(origin, "<t>");
+            }
+            Request::Realize { .. } => panic!("wrong op"),
+        }
+    }
+
+    #[test]
+    fn realize_request_and_response_roundtrip() {
+        let req = Request::Realize {
+            flake_dir: "/tmp/env".into(),
+            work_dir: "/tmp/work".into(),
+        };
+        let line = serde_json::to_string(&req).unwrap();
+        assert!(!line.contains('\n'));
+        let back: Request = serde_json::from_str(&line).unwrap();
+        match back {
+            Request::Realize {
+                flake_dir,
+                work_dir,
+            } => {
+                assert_eq!(flake_dir, PathBuf::from("/tmp/env"));
+                assert_eq!(work_dir, PathBuf::from("/tmp/work"));
+            }
+            Request::EvalString { .. } => panic!("wrong op"),
+        }
+
+        let resp = Response {
+            ok: true,
+            out_path: Some("/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-x".into()),
+            export_path: Some("/tmp/work/export".into()),
+            nars: vec![NarFile {
+                store_path: "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-x".into(),
+                nar_path: "/tmp/work/nars/0.nar".into(),
+                references: vec![],
+            }],
+            ..Response::default()
+        };
+        let decoded: Response =
+            serde_json::from_str(&serde_json::to_string(&resp).unwrap()).unwrap();
+        assert!(decoded.ok);
+        assert_eq!(
+            decoded.nars[0].nar_path,
+            PathBuf::from("/tmp/work/nars/0.nar")
+        );
+    }
+
+    #[test]
+    fn missing_helper_is_failed() {
+        let err = call_bin(
+            Path::new("/no/such/snowbox-eval"),
+            &Request::EvalString {
+                expr: "\"x\"".into(),
+                origin: "<t>".into(),
+            },
+        )
+        .unwrap_err();
+        match err {
+            ActionError::Failed(msg) => {
+                assert!(msg.contains("spawn snowbox-eval"), "{msg}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
     }
 }

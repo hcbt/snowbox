@@ -30,16 +30,26 @@ pub fn write_default(dir: &Path) -> Result<(), ActionError> {
     std::fs::write(env_dir.join("flake.nix"), DEFAULT_FLAKE).map_err(|_| ActionError::Internal)?;
     std::fs::write(env_dir.join("flake.lock"), DEFAULT_LOCK).map_err(|_| ActionError::Internal)?;
     std::fs::write(env_dir.join("home.nix"), DEFAULT_HOME).map_err(|_| ActionError::Internal)?;
-    std::fs::write(env_dir.join("config.json"), DEFAULT_CONFIG.trim()).map_err(|_| ActionError::Internal)?;
+    std::fs::write(env_dir.join("config.json"), DEFAULT_CONFIG.trim())
+        .map_err(|_| ActionError::Internal)?;
     Ok(())
 }
 
 pub fn fingerprint(dir: &Path) -> Result<String, ActionError> {
-    let cfg = std::fs::read_to_string(dir.join("environment/config.json"))
-        .map_err(|_| ActionError::Internal)?;
-    let lock = std::fs::read_to_string(dir.join("environment/flake.lock"))
-        .map_err(|_| ActionError::Internal)?;
-    Ok(format!("{cfg}\n{lock}"))
+    let env = dir.join("environment");
+    let cfg = std::fs::read(env.join("config.json")).map_err(|_| ActionError::Internal)?;
+    let lock = std::fs::read(env.join("flake.lock")).map_err(|_| ActionError::Internal)?;
+    let home = std::fs::read(env.join("home.nix")).map_err(|_| ActionError::Internal)?;
+    let flake = std::fs::read(env.join("flake.nix")).map_err(|_| ActionError::Internal)?;
+    let mut out = Vec::new();
+    out.extend_from_slice(&cfg);
+    out.push(b'\n');
+    out.extend_from_slice(&lock);
+    out.push(b'\n');
+    out.extend_from_slice(&home);
+    out.push(b'\n');
+    out.extend_from_slice(&flake);
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 pub fn config(dir: &Path) -> Result<serde_json::Value, ActionError> {
@@ -83,6 +93,24 @@ mod tests {
         let mut next = cfg.clone();
         next["programs"]["claude-code"]["enable"] = serde_json::Value::Bool(true);
         set_config(dir.path(), &next).unwrap();
+        assert_ne!(a, fingerprint(dir.path()).unwrap());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_home_nix_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        write_default(dir.path()).unwrap();
+        let a = fingerprint(dir.path()).unwrap();
+        std::fs::write(dir.path().join("environment/home.nix"), "changed home\n").unwrap();
+        assert_ne!(a, fingerprint(dir.path()).unwrap());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_flake_nix_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        write_default(dir.path()).unwrap();
+        let a = fingerprint(dir.path()).unwrap();
+        std::fs::write(dir.path().join("environment/flake.nix"), "# changed\n").unwrap();
         assert_ne!(a, fingerprint(dir.path()).unwrap());
     }
 
