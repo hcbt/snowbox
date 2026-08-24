@@ -188,12 +188,14 @@ async fn stop(
     let vmm = hypervisor(&state)?;
     let store = state.store.clone();
     let resume = state.resume.clone();
-    state.publish.drop_sandbox(id);
-    state.sessions.drop_sandbox(id);
     let result = tokio::task::spawn_blocking(move || halt(store, vmm, resume, id, true))
         .await
         .map_err(|_| ActionError::Internal)
         .and_then(|r| r);
+    if result.is_ok() {
+        state.publish.drop_sandbox(id);
+        state.sessions.drop_sandbox(id);
+    }
     action(result)
 }
 
@@ -204,8 +206,6 @@ async fn reset(
     let sandbox = state.store.get(id).map_err(map_err)?;
     if sandbox.state == SandboxState::Running {
         let vmm = hypervisor(&state)?;
-        state.publish.drop_sandbox(id);
-        state.sessions.drop_sandbox(id);
         let store = state.store.clone();
         let resume = state.resume.clone();
         let result = tokio::task::spawn_blocking(move || {
@@ -215,6 +215,10 @@ async fn reset(
         .await
         .map_err(|_| ActionError::Internal)
         .and_then(|r| r);
+        if result.is_ok() {
+            state.publish.drop_sandbox(id);
+            state.sessions.drop_sandbox(id);
+        }
         return action(result);
     }
     action(state.store.reset(id))

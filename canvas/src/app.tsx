@@ -60,7 +60,7 @@ export function App() {
   onSettled(() => {
     refresh().catch((e) => setStatus(String(e)));
     const t = setInterval(() => {
-      api.sandboxes().then((s) => setSandboxes(s.sandboxes)).catch(() => {});
+      refresh().catch(() => {});
     }, 2000);
     return () => clearInterval(t);
   });
@@ -115,15 +115,17 @@ export function App() {
     queueMicrotask(() => focusTerm(id));
   };
 
-  const run = async (fn: () => Promise<unknown>) => {
+  const run = async (fn: () => Promise<unknown>, done = "") => {
     setBusy(true);
     setStatus("");
     try {
       await fn();
       await refresh();
-      setStatus("");
+      setStatus(done);
+      return true;
     } catch (e) {
       setStatus(String(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -528,7 +530,7 @@ function OverlayDialog(props: {
   move: (x: number, y: number) => void;
   pickSandbox: (id: string) => void;
   close: () => void;
-  run: (fn: () => Promise<unknown>) => void;
+  run: (fn: () => Promise<unknown>, done?: string) => Promise<boolean>;
 }) {
   const [name, setName] = createSignal("");
   const [cpu, setCpu] = createSignal(String(props.sandbox?.limits.cpu ?? 2));
@@ -541,6 +543,7 @@ function OverlayDialog(props: {
   const [tpl, setTpl] = createSignal("empty");
   const [templates, setTemplates] = createSignal<Template[]>([]);
   const [agents, setAgents] = createSignal<AgentProgram[]>([]);
+  const [envDoc, setEnvDoc] = createSignal<Record<string, unknown>>({});
   const [envCfg, setEnvCfg] = createSignal<Record<string, Record<string, unknown>>>({});
   const [path, setPath] = createSignal("");
   const [pubPort, setPubPort] = createSignal("3000");
@@ -560,6 +563,7 @@ function OverlayDialog(props: {
     Promise.all([api.agentOptions(), api.environment(id)])
       .then(([opts, cfg]) => {
         setAgents(opts.programs);
+        setEnvDoc(cfg);
         const programs = (cfg.programs ?? {}) as Record<string, Record<string, unknown>>;
         setEnvCfg(programs);
       })
@@ -582,24 +586,40 @@ function OverlayDialog(props: {
     return "snowbox";
   };
 
-  const submit = () => {
+  const submit = async () => {
     const ov = props.overlay;
+    if (ov.kind === "sandboxes") {
+      props.close();
+      return;
+    }
+    if (ov.kind === "save-template" && !name().trim()) return;
+
+    let ok = false;
     if (ov.kind === "sandbox") {
-      props.run(async () => {
+      ok = await props.run(async () => {
         const sb = await api.create(name() || undefined, tpl() || undefined);
         await api.start(sb.id);
         await api.openWindow(sb.id);
       });
     } else if (ov.kind === "save-template") {
-      if (!name().trim()) return;
-      props.run(() => api.saveTemplate(name().trim(), ov.id));
+      ok = await props.run(() => api.saveTemplate(name().trim(), ov.id));
     } else if (ov.kind === "publish") {
       const host = hostPort().trim();
-      props.run(() =>
-        api.publish(ov.id, Number(pubPort()), host ? Number(host) : undefined),
-      );
+      await props.run(async () => {
+        const pub = await api.publish(
+          ov.id,
+          Number(pubPort()),
+          host ? Number(host) : undefined,
+        );
+        const list = await api.published(ov.id);
+        const rows = list.published.some((p) => p.url === pub.url)
+          ? list.published
+          : [...list.published, pub];
+        setPublished(rows);
+      });
+      return;
     } else if (ov.kind === "limits") {
-      props.run(() =>
+      ok = await props.run(() =>
         api.patchLimits(ov.id, {
           cpu: Number(cpu()),
           ram: Number(ram()) * 1024 * 1024,
@@ -607,24 +627,23 @@ function OverlayDialog(props: {
         }),
       );
     } else if (ov.kind === "hatch") {
-      props.run(() => api.saveEnvironment(ov.id, { programs: envCfg() }));
+      const running = props.sandbox?.state === "running";
+      ok = await props.run(
+        () => api.saveEnvironment(ov.id, { ...envDoc(), programs: envCfg() }),
+        running ? "" : "applies on Start",
+      );
     } else if (ov.kind === "copy") {
-      props.run(() =>
+      ok = await props.run(() =>
         ov.dir === "in"
           ? api.copyIn(ov.id, path(), replace())
           : api.copyOut(ov.id, path(), replace()),
       );
     } else if (ov.kind === "destroy") {
-      props.run(async () => {
-        await api.destroy(ov.id);
-      });
+      ok = await props.run(() => api.destroy(ov.id));
     } else if (ov.kind === "reset") {
-      props.run(() => api.reset(ov.id));
-    } else if (ov.kind === "sandboxes") {
-      props.close();
-      return;
+      ok = await props.run(() => api.reset(ov.id));
     }
-    props.close();
+    if (ok) props.close();
   };
 
   const field =
@@ -644,7 +663,7 @@ function OverlayDialog(props: {
         class="min-w-80 bg-white px-3.5 py-3 font-twm text-black"
         onSubmit={(e) => {
           e.preventDefault();
-          submit();
+          void submit();
         }}
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -715,11 +734,26 @@ function OverlayDialog(props: {
         <Show when={props.overlay.kind === "publish"}>
           <For each={published()} keyed={(p) => p.port}>
             {(p) => (
-              <div class="flex items-center justify-between text-[12px]">
-                <a class="text-twm" href={p().url}>
+              <div class="flex items-center justify-between gap-2 text-[12px]">
+                <a class="min-w-0 truncate text-twm" href={p().url}>
                   {p().url}
                 </a>
                 <span>:{p().port}</span>
+                <button
+                  type="button"
+                  class="border border-twm-line bg-twm px-2 py-0.5 font-bold text-white"
+                  onClick={() => {
+                    const ov = props.overlay;
+                    if (ov.kind !== "publish") return;
+                    const port = p().port;
+                    void props.run(async () => {
+                      await api.unpublish(ov.id, port);
+                      setPublished((await api.published(ov.id)).published);
+                    });
+                  }}
+                >
+                  Unpublish
+                </button>
               </div>
             )}
           </For>

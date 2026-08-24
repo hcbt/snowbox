@@ -42,11 +42,23 @@ export type Layout = {
   icon_manager: { x: number; y: number; visible: boolean };
 };
 
+declare global {
+  interface Window {
+    __SNOWBOX_TOKEN__?: string;
+  }
+}
+
+export function sessionToken(): string | undefined {
+  return globalThis.window?.__SNOWBOX_TOKEN__;
+}
+
 async function req(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = sessionToken();
   const r = await fetch(path, {
     credentials: "same-origin",
     ...init,
     headers: {
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(init.body ? { "content-type": "application/json" } : {}),
       ...(init.headers ?? {}),
     },
@@ -54,14 +66,20 @@ async function req(path: string, init: RequestInit = {}): Promise<Response> {
   return r;
 }
 
-async function json<T>(path: string, init?: RequestInit): Promise<T> {
+/** Throws on !ok. 204 has no JSON body. */
+export async function json<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await req(path, init);
-  if (r.status === 204) return undefined as T;
-  const body = await r.json();
   if (!r.ok) {
+    let body: { detail?: string; error?: string } = {};
+    try {
+      body = (await r.json()) as { detail?: string; error?: string };
+    } catch {
+      /* 4xx/5xx may have an empty body */
+    }
     throw new Error(body.detail || body.error || r.statusText);
   }
-  return body as T;
+  if (r.status === 204) return undefined as T;
+  return (await r.json()) as T;
 }
 
 export const api = {
@@ -88,7 +106,7 @@ export const api = {
       body: JSON.stringify({ port, host_port: host_port ?? null }),
     }),
   unpublish: (id: string, port: number) =>
-    req(`/api/v1/sandboxes/${id}/publish/${port}`, { method: "DELETE" }),
+    json<void>(`/api/v1/sandboxes/${id}/publish/${port}`, { method: "DELETE" }),
   start: (id: string) =>
     json<Sandbox>(`/api/v1/sandboxes/${id}/start`, { method: "POST" }),
   stop: (id: string) =>
@@ -96,7 +114,7 @@ export const api = {
   reset: (id: string) =>
     json<Sandbox>(`/api/v1/sandboxes/${id}/reset`, { method: "POST" }),
   destroy: (id: string) =>
-    req(`/api/v1/sandboxes/${id}`, { method: "DELETE" }),
+    json<void>(`/api/v1/sandboxes/${id}`, { method: "DELETE" }),
   layout: () => json<Layout>("/api/v1/layout"),
   saveLayout: (layout: Layout) =>
     json<Layout>("/api/v1/layout", {
@@ -106,7 +124,7 @@ export const api = {
   openWindow: (sandbox: string) =>
     json<WindowRec>(`/api/v1/sandboxes/${sandbox}/windows`, { method: "POST" }),
   closeWindow: (id: string) =>
-    req(`/api/v1/windows/${id}`, { method: "DELETE" }),
+    json<void>(`/api/v1/windows/${id}`, { method: "DELETE" }),
   patchLimits: (id: string, limits: Partial<Limits>) =>
     json<Sandbox>(`/api/v1/sandboxes/${id}`, {
       method: "PATCH",

@@ -2,6 +2,7 @@ import { createEffect, onSettled } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { json } from "./api";
 
 export function Term(props: {
   windowId: string;
@@ -38,39 +39,52 @@ export function Term(props: {
     t.loadAddon(fit);
     t.open(host);
 
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(
-      `${proto}://${location.host}/api/v1/windows/${props.windowId}/pty`,
-    );
-    ws.binaryType = "arraybuffer";
+    let dropped = false;
+    let ws: WebSocket | undefined;
+    const enc = new TextEncoder();
     const sendSize = () => {
-      if (ws.readyState === WebSocket.OPEN && t.cols > 0 && t.rows > 0) {
+      if (ws?.readyState === WebSocket.OPEN && t.cols > 0 && t.rows > 0) {
         ws.send(`resize ${t.cols} ${t.rows}`);
       }
     };
-    ws.onopen = () => {
-      fit.fit();
-      sendSize();
-      if (props.active !== false) t.focus();
-    };
-    ws.onmessage = (ev) => {
-      if (typeof ev.data === "string") {
-        t.write(ev.data);
-        return;
-      }
-      t.write(new Uint8Array(ev.data as ArrayBuffer));
-    };
-    const enc = new TextEncoder();
     t.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(enc.encode(data));
+      if (ws?.readyState === WebSocket.OPEN) ws.send(enc.encode(data));
     });
     t.onResize(() => sendSize());
-    let dropped = false;
-    ws.onclose = () => {
-      if (!dropped) t.write("\r\n[window closed]\r\n");
-    };
     const ro = new ResizeObserver(() => fit.fit());
     ro.observe(host);
+
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    // Mint the session cookie (browsers cannot set Authorization on
+    // WebSocket) then upgrade with Origin + cookie.
+    void json("/api/v1/health")
+      .then(() => {
+        if (dropped) return;
+        const sock = new WebSocket(
+          `${proto}://${location.host}/api/v1/windows/${props.windowId}/pty`,
+        );
+        ws = sock;
+        sock.binaryType = "arraybuffer";
+        sock.onopen = () => {
+          fit.fit();
+          sendSize();
+          if (props.active !== false) t.focus();
+        };
+        sock.onmessage = (ev) => {
+          if (typeof ev.data === "string") {
+            t.write(ev.data);
+            return;
+          }
+          t.write(new Uint8Array(ev.data as ArrayBuffer));
+        };
+        sock.onclose = () => {
+          if (!dropped) t.write("\r\n[window closed]\r\n");
+        };
+      })
+      .catch((e) => {
+        if (!dropped) t.write(`\r\n[window: ${e}]\r\n`);
+      });
+
     requestAnimationFrame(() => {
       fit.fit();
       sendSize();
@@ -79,7 +93,7 @@ export function Term(props: {
       dropped = true;
       term = undefined;
       ro.disconnect();
-      ws.close();
+      ws?.close();
       t.dispose();
     };
   });

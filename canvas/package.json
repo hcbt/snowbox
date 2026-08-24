@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "test": "bun test"
   },
   "dependencies": {
     "@solidjs/web": "2.0.0-rc.1",
