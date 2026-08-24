@@ -21,6 +21,8 @@ use crate::sandbox::{ActionError, State as SandboxState};
 use crate::vmm::{Control, Hypervisor, SHELL_PORT};
 
 const REPLAY_MAX: usize = 512 * 1024;
+const FRAME_STDIN: u8 = 0;
+const FRAME_WINSIZE: u8 = 1;
 
 #[derive(Clone, Default)]
 pub struct Sessions {
@@ -85,7 +87,6 @@ async fn pump(
     window: Uuid,
     sandbox: Uuid,
 ) {
-    let vmm_stty = vmm.clone();
     let live = match attach(&sessions, vmm, window, sandbox).await {
         Ok(live) => live,
         Err(e) => {
@@ -111,22 +112,14 @@ async fn pump(
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Binary(b))) => {
-                        if live.inn.send(b.to_vec()).await.is_err() { break; }
+                        if live.inn.send(frame_stdin(&b)).await.is_err() { break; }
                     }
                     Some(Ok(Message::Text(t))) => {
-                        if let Some(rest) = t.strip_prefix("resize ") {
-                            let mut sp = rest.split_whitespace();
-                            if let (Some(cols), Some(rows)) = (sp.next(), sp.next()) {
-                                if let (Ok(cols), Ok(rows)) = (cols.parse::<u16>(), rows.parse::<u16>()) {
-                                    if cols > 0 && rows > 0 {
-                                        let v = vmm_stty.clone();
-                                        tokio::task::spawn_blocking(move || {
-                                            let _ = crate::agent::winsize(&*v, sandbox, cols, rows);
-                                        });
-                                    }
-                                }
+                        if let Some((rows, cols)) = parse_resize(&t) {
+                            if live.inn.send(frame_winsize(rows, cols)).await.is_err() {
+                                break;
                             }
-                        } else if live.inn.send(t.as_bytes().to_vec()).await.is_err() {
+                        } else if live.inn.send(frame_stdin(t.as_bytes())).await.is_err() {
                             break;
                         }
                     }
@@ -237,6 +230,31 @@ fn snapshot(live: &Live) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
     (replay.clone(), rx)
 }
 
+/// WebSocket `resize COLS ROWS` → (rows, cols) for the vsock frame.
+fn parse_resize(text: &str) -> Option<(u16, u16)> {
+    let rest = text.strip_prefix("resize ")?;
+    let mut sp = rest.split_whitespace();
+    let cols: u16 = sp.next()?.parse().ok()?;
+    let rows: u16 = sp.next()?.parse().ok()?;
+    (cols > 0 && rows > 0).then_some((rows, cols))
+}
+
+fn frame_stdin(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(5 + bytes.len());
+    out.push(FRAME_STDIN);
+    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(bytes);
+    out
+}
+
+fn frame_winsize(rows: u16, cols: u16) -> Vec<u8> {
+    let mut out = Vec::with_capacity(5);
+    out.push(FRAME_WINSIZE);
+    out.extend_from_slice(&rows.to_le_bytes());
+    out.extend_from_slice(&cols.to_le_bytes());
+    out
+}
+
 fn append_replay(buf: &Mutex<Vec<u8>>, chunk: &[u8]) {
     let mut g = buf.lock().expect("pty replay");
     g.extend_from_slice(chunk);
@@ -291,5 +309,25 @@ mod tests {
         let map = sessions.inner.lock().unwrap();
         assert!(!map.contains_key(&a));
         assert!(map.contains_key(&b));
+    }
+
+    #[test]
+    fn parse_resize_cols_then_rows() {
+        assert_eq!(parse_resize("resize 80 24"), Some((24, 80)));
+        assert_eq!(parse_resize("resize 0 24"), None);
+        assert_eq!(parse_resize("hello"), None);
+    }
+
+    #[test]
+    fn frame_stdin_layout() {
+        let f = frame_stdin(b"abc");
+        assert_eq!(f[0], FRAME_STDIN);
+        assert_eq!(&f[1..5], &3u32.to_le_bytes());
+        assert_eq!(&f[5..], b"abc");
+    }
+
+    #[test]
+    fn frame_winsize_layout() {
+        assert_eq!(frame_winsize(24, 80), vec![FRAME_WINSIZE, 24, 0, 80, 0]);
     }
 }

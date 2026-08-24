@@ -4,16 +4,17 @@ use std::io;
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 
-use libc::{sockaddr, sockaddr_vm, socklen_t, AF_VSOCK, SOCK_STREAM, VMADDR_CID_ANY};
+use libc::{AF_VSOCK, SOCK_STREAM, VMADDR_CID_ANY, sockaddr, sockaddr_vm, socklen_t};
 
 pub struct VsockListener {
     fd: OwnedFd,
 }
 
-/// Bind, retrying while virtio-vsock is still probing.
+/// Bind, retrying while virtio-vsock is still probing. After restore the
+/// Host reconnects; this process must bind again (the vsock did not survive).
 pub fn bind_retry(port: u32) -> io::Result<VsockListener> {
     let mut last = None;
-    for attempt in 0..120 {
+    for attempt in 0..240 {
         match VsockListener::bind(port) {
             Ok(listener) => return Ok(listener),
             Err(e) => {

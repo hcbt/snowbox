@@ -14,7 +14,7 @@
           version = "0.0.0";
           src = ./control;
           cargoLock.lockFile = ./control/Cargo.lock;
-          doCheck = false;
+          doCheck = true;
         };
       mk =
         system:

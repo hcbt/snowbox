@@ -7,7 +7,13 @@ let
   # Canvas + guest (if missing) + Daemon. `devenv up` / `devenv shell -- snowbox`.
   stack = ''
     set -euo pipefail
-    if [ ! -f guest/result/root.raw ]; then
+    # Rebuild when the baked runtime is missing or guest sources are newer.
+    # `devenv shell -- guest` always rebuilds.
+    if [ ! -f guest/result/root.raw ] \
+      || [ guest/module.nix -nt guest/result/root.raw ] \
+      || [ guest/flake.nix -nt guest/result/root.raw ] \
+      || find guest/control/src guest/control/Cargo.toml guest/control/Cargo.lock \
+        -newer guest/result/root.raw 2>/dev/null | grep -q .; then
       nix build path:./guest#packages.${guestSystem}.runtime --out-link guest/result
     fi
     ( cd canvas && bun install && bun run build )

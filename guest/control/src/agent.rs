@@ -2,8 +2,10 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+
+const ALLOWED_ROOTS: [&str; 2] = ["/workspace", "/home/snow"];
 
 /// One vsock connection: one verb, then close.
 pub fn handle_socket(mut stream: UnixStream) -> io::Result<()> {
@@ -62,26 +64,38 @@ fn split_cmd(header: &str) -> (&str, &str) {
 }
 
 fn tar_in(stream: &mut impl Read, dest: &str) -> io::Result<()> {
-    if dest.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "TAR_IN path"));
-    }
-    fs::create_dir_all(dest)?;
-    let mut archive = tar::Archive::new(stream);
-    archive.set_unpack_xattrs(false);
-    archive.set_preserve_permissions(false);
-    archive.unpack(dest)?;
+    let dest = allow_guest_path(dest)?;
+    unpack_tar_in(stream, &dest)?;
     let _ = Command::new("chown")
-        .args(["-R", "snow:snow", dest])
+        .args(["-R", "snow:snow"])
+        .arg(&dest)
         .status();
     Ok(())
 }
 
-fn tar_out(stream: &mut impl Write, src: &str) -> io::Result<()> {
-    if src.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "TAR_OUT path"));
+fn unpack_tar_in(stream: &mut impl Read, dest: &Path) -> io::Result<()> {
+    fs::create_dir_all(dest)?;
+    let mut archive = tar::Archive::new(stream);
+    archive.set_unpack_xattrs(false);
+    archive.set_preserve_permissions(false);
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        entry.set_unpack_xattrs(false);
+        entry.set_preserve_permissions(false);
+        if !entry.unpack_in(dest)? {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "tar member escaped dest",
+            ));
+        }
     }
+    Ok(())
+}
+
+fn tar_out(stream: &mut impl Write, src: &str) -> io::Result<()> {
+    let src = allow_guest_path(src)?;
     let mut builder = tar::Builder::new(stream);
-    builder.append_dir_all(".", src)?;
+    builder.append_dir_all(".", &src)?;
     builder.finish()
 }
 
@@ -106,14 +120,18 @@ fn nar_in(stream: &mut impl Read) -> io::Result<()> {
 }
 
 fn profile(store_path: &str) -> io::Result<()> {
-    if store_path.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "PROFILE path"));
+    if !is_nix_store_path(store_path) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "PROFILE path must be a nix store path",
+        ));
     }
+    let store_path = Path::new(store_path);
     fs::create_dir_all("/nix/var/nix/profiles")?;
     let dest = Path::new("/nix/var/nix/profiles/snowbox-environment");
     let _ = fs::remove_file(dest);
-    std::os::unix::fs::symlink(store_path, dest)?;
-    let activate = Path::new(store_path).join("activate");
+    std::os::unix::fs::symlink(profile_link_target(store_path), dest)?;
+    let activate = store_path.join("activate");
     if activate.is_file() {
         let status = Command::new("runuser")
             .args(["-u", "snow", "--"])
@@ -126,10 +144,51 @@ fn profile(store_path: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn reset_dir(dest: &str) -> io::Result<()> {
-    if dest.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "RESET path"));
+/// HM activationPackage puts user binaries in `home-path/bin`, not `$out/bin`.
+fn profile_link_target(store_path: &Path) -> PathBuf {
+    let home_path = store_path.join("home-path");
+    if home_path.is_dir() {
+        home_path
+    } else {
+        store_path.to_path_buf()
     }
+}
+
+fn is_nix_store_path(path: &str) -> bool {
+    let p = Path::new(path);
+    if !p.is_absolute() {
+        return false;
+    }
+    let mut comps = p.components();
+    matches!(
+        (
+            comps.next(),
+            comps.next(),
+            comps.next(),
+            comps.next(),
+            comps.next()
+        ),
+        (
+            Some(Component::RootDir),
+            Some(Component::Normal(nix)),
+            Some(Component::Normal(store)),
+            Some(Component::Normal(hash_name)),
+            None
+        ) if nix == "nix" && store == "store" && !hash_name.is_empty()
+    )
+}
+
+fn reset_dir(dest: &str) -> io::Result<()> {
+    let dest = allow_guest_path(dest)?;
+    empty_dir(&dest)?;
+    let _ = Command::new("chown")
+        .args(["snow:snow"])
+        .arg(&dest)
+        .status();
+    Ok(())
+}
+
+fn empty_dir(dest: &Path) -> io::Result<()> {
     fs::create_dir_all(dest)?;
     for ent in fs::read_dir(dest)? {
         let path = ent?.path();
@@ -139,31 +198,47 @@ fn reset_dir(dest: &str) -> io::Result<()> {
             fs::remove_file(&path)?;
         }
     }
-    let _ = Command::new("chown").args(["snow:snow", dest]).status();
     Ok(())
 }
 
 fn stty(arg: &str) -> io::Result<()> {
-    let (rows, cols) = parse_winsize(arg).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "STTY rowsxcols")
-    })?;
-    let Ok(dir) = fs::read_dir("/dev/pts") else {
-        return Ok(());
-    };
-    for ent in dir {
-        let Ok(ent) = ent else { continue };
-        let path = ent.path();
-        if path.file_name().is_some_and(|n| n == "ptmx") {
-            continue;
+    let arg = arg.trim();
+    let (size, pts) = match arg.split_once(' ') {
+        Some((size, pts)) => (size, pts.trim()),
+        None => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "STTY requires a pts path",
+            ));
         }
-        let Ok(f) = fs::File::options().write(true).open(&path) else {
-            continue;
-        };
-        use std::os::fd::AsRawFd;
-        let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
-        ws.ws_row = rows;
-        ws.ws_col = cols;
-        let _ = unsafe { libc::ioctl(f.as_raw_fd(), libc::TIOCSWINSZ, &ws) };
+    };
+    if pts.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "STTY requires a pts path",
+        ));
+    }
+    let pts_path = Path::new(pts);
+    if !pts_path.starts_with("/dev/pts")
+        || pts_path.file_name().is_some_and(|n| n == "ptmx")
+        || pts_path
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "STTY pts path",
+        ));
+    }
+    let (rows, cols) = parse_winsize(size)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "STTY rowsxcols"))?;
+    let f = fs::File::options().write(true).open(pts_path)?;
+    use std::os::fd::AsRawFd;
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    ws.ws_row = rows;
+    ws.ws_col = cols;
+    if unsafe { libc::ioctl(f.as_raw_fd(), libc::TIOCSWINSZ, &ws) } != 0 {
+        return Err(io::Error::last_os_error());
     }
     Ok(())
 }
@@ -183,6 +258,80 @@ fn connect_duplex(stream: UnixStream, port: &str) -> io::Result<()> {
     let _ = io::copy(&mut tcp, &mut stream_w);
     let _ = up.join();
     Ok(())
+}
+
+fn allow_guest_path(path: &str) -> io::Result<PathBuf> {
+    allow_guest_path_in(path, &ALLOWED_ROOTS)
+}
+
+fn allow_guest_path_in(path: &str, roots: &[&str]) -> io::Result<PathBuf> {
+    if path.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty path"));
+    }
+    let requested = Path::new(path);
+    if !requested.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path must be absolute",
+        ));
+    }
+    let lexical = lexically_normalize(requested)?;
+    let Some(root) = roots.iter().map(Path::new).find(|r| is_under(&lexical, r)) else {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "path not allowed",
+        ));
+    };
+    let root_canon = if root.exists() {
+        root.canonicalize()?
+    } else {
+        root.to_path_buf()
+    };
+    let rel = lexical.strip_prefix(root).unwrap_or(Path::new(""));
+    let mut acc = root_canon.clone();
+    for c in rel.components() {
+        acc.push(c);
+        if acc.is_symlink() {
+            let canon = acc
+                .canonicalize()
+                .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "path not allowed"))?;
+            if !is_under(&canon, &root_canon) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "path not allowed",
+                ));
+            }
+            acc = canon;
+        }
+    }
+    Ok(acc)
+}
+
+fn lexically_normalize(path: &Path) -> io::Result<PathBuf> {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::RootDir => out.push("/"),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() || out.as_os_str().is_empty() {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "path escapes"));
+                }
+            }
+            Component::Normal(p) => out.push(p),
+            Component::Prefix(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "path not allowed",
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn is_under(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
 }
 
 #[cfg(test)]
@@ -208,37 +357,147 @@ mod tests {
     }
 
     #[test]
-    fn reset_empties_dir() {
+    fn allowlist_accepts_workspace_and_home() {
+        for p in [
+            "/workspace",
+            "/workspace/src",
+            "/home/snow",
+            "/home/snow/.gitconfig",
+        ] {
+            allow_guest_path(p).unwrap_or_else(|e| panic!("{p}: {e}"));
+        }
+    }
+
+    #[test]
+    fn allowlist_rejects_outside() {
+        for p in [
+            "/",
+            "/etc",
+            "/tmp/escape",
+            "/workspace/../etc",
+            "/home/snow/../../etc",
+        ] {
+            assert!(allow_guest_path(p).is_err(), "{p} should be rejected");
+        }
+        assert!(allow_guest_path("workspace").is_err());
+        assert!(allow_guest_path("").is_err());
+    }
+
+    #[test]
+    fn allowlist_rejects_symlink_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        let outside = tmp.path().join("secret");
+        fs::write(&outside, "x").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        let roots = [root.to_str().unwrap()];
+        let escaped = root.join("link");
+        assert!(allow_guest_path_in(escaped.to_str().unwrap(), &roots).is_err());
+        assert!(allow_guest_path_in(root.to_str().unwrap(), &roots).is_ok());
+    }
+
+    #[test]
+    fn unpack_in_does_not_write_outside_dest() {
+        let dest = tempfile::tempdir().unwrap();
+        let outside = dest.path().parent().unwrap().join("pwned");
+        let _ = fs::remove_file(&outside);
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let mut header = tar::Header::new_gnu();
+            header.as_gnu_mut().unwrap().name[..8].copy_from_slice(b"../pwned");
+            header.set_size(3);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_cksum();
+            builder.append(&header, &b"yes"[..]).unwrap();
+            builder.finish().unwrap();
+        }
+        let err = unpack_tar_in(&mut tar_bytes.as_slice(), dest.path()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(!outside.exists(), "escaped tar member was written");
+    }
+
+    #[test]
+    fn empty_dir_clears_contents() {
         let dir = tempfile::tempdir().unwrap();
         let nested = dir.path().join("a");
         fs::create_dir(&nested).unwrap();
         fs::write(nested.join("f"), "x").unwrap();
         fs::write(dir.path().join(".hidden"), "y").unwrap();
-        reset_dir(dir.path().to_str().unwrap()).unwrap();
+        empty_dir(dir.path()).unwrap();
         assert!(fs::read_dir(dir.path()).unwrap().next().is_none());
     }
 
     #[test]
-    fn tar_roundtrip() {
+    fn tar_roundtrip_stays_in_dest() {
         let src = tempfile::tempdir().unwrap();
         fs::write(src.path().join("hi"), "hello").unwrap();
         let dest = tempfile::tempdir().unwrap();
-        let (mut a, b) = UnixStream::pair().unwrap();
-        let dest_s = dest.path().to_string_lossy().into_owned();
-        thread::spawn(move || {
-            handle_socket(b).unwrap();
-        });
-        a.write_all(format!("TAR_IN {dest_s}\n").as_bytes())
-            .unwrap();
+        let mut tar_bytes = Vec::new();
         {
-            let mut builder = tar::Builder::new(&mut a);
+            let mut builder = tar::Builder::new(&mut tar_bytes);
             builder.append_dir_all(".", src.path()).unwrap();
             builder.finish().unwrap();
         }
-        a.shutdown(std::net::Shutdown::Write).unwrap();
-        let mut reply = String::new();
-        a.read_to_string(&mut reply).unwrap();
-        assert!(reply.contains("OK"), "{reply}");
+        unpack_tar_in(&mut tar_bytes.as_slice(), dest.path()).unwrap();
         assert_eq!(fs::read_to_string(dest.path().join("hi")).unwrap(), "hello");
+    }
+
+    #[test]
+    fn tar_in_rejects_etc() {
+        let (mut a, b) = UnixStream::pair().unwrap();
+        let t = thread::spawn(move || handle_socket(b));
+        a.write_all(b"TAR_IN /etc\n").unwrap();
+        let _ = a.shutdown(std::net::Shutdown::Write);
+        let mut reply = String::new();
+        let _ = a.read_to_string(&mut reply);
+        assert!(!reply.contains("OK"), "{reply}");
+        let _ = t.join();
+    }
+
+    #[test]
+    fn reset_rejects_root() {
+        let (mut a, b) = UnixStream::pair().unwrap();
+        let t = thread::spawn(move || handle_socket(b));
+        a.write_all(b"RESET /\n").unwrap();
+        let _ = a.shutdown(std::net::Shutdown::Write);
+        let mut reply = String::new();
+        let _ = a.read_to_string(&mut reply);
+        assert!(!reply.contains("OK"), "{reply}");
+        let _ = t.join();
+    }
+
+    #[test]
+    fn stty_without_pts_errors() {
+        let err = stty("24x80").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn profile_requires_store_path() {
+        assert!(is_nix_store_path(
+            "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-home-manager-generation"
+        ));
+        assert!(!is_nix_store_path("/etc"));
+        assert!(!is_nix_store_path("/"));
+        assert!(!is_nix_store_path("/nix/store"));
+        assert!(!is_nix_store_path(
+            "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-pkg/../../../etc"
+        ));
+        assert!(profile("/etc").is_err());
+        assert!(profile("/nix/store/foo/../../../etc").is_err());
+    }
+
+    #[test]
+    fn profile_prefers_home_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("gen");
+        fs::create_dir_all(store.join("home-path/bin")).unwrap();
+        fs::write(store.join("activate"), "true").unwrap();
+        assert_eq!(profile_link_target(&store), store.join("home-path"));
+        let plain = dir.path().join("plain");
+        fs::create_dir(&plain).unwrap();
+        assert_eq!(profile_link_target(&plain), plain);
     }
 }

@@ -48,8 +48,16 @@
       neededForBoot = true;
     };
 
+    # Bake a small image. Host set_len grows the disk; boot-time
+    # systemd-repart grows the GPT/ext4 (SizeMaxBytes here would cap that).
+    boot.initrd.systemd.repart.enable = true;
+    systemd.repart.partitions."10-root" = {
+      Type = "root";
+      GrowFileSystem = "yes";
+    };
+
     image.modules.sandbox =
-      { config, modulesPath, ... }:
+      { modulesPath, ... }:
       {
         imports = [ (modulesPath + "/image/repart.nix") ];
         image.repart = {
@@ -58,6 +66,8 @@
           # before Minimize. The Daemon grows the disk to the Sandbox Limit.
           imageSize = "4G";
           partitions."10-root" = {
+            # Outer toplevel, not this extendModules evaluation — init= on
+            # the Host cmdline must match the closure on disk.
             storePaths = [ config.system.build.toplevel ];
             repartConfig = {
               Type = "root";
@@ -95,17 +105,20 @@
       # Login shell for Windows. Written to passwd as
       # /run/current-system/sw/bin/bash. NixOS has no /bin/bash.
       shell = pkgs.bashInteractive;
+      # Windows are vsock PTYs, not PAM sessions. Linger keeps /run/user/snow.
+      linger = true;
     };
     users.users.root.hashedPassword = "!";
     security.sudo.wheelNeedsPassword = false;
-    services.getty.autologinUser = "snow";
+    # Windows are vsock PTYs. Autologin on hvc0 fights the write-only console.
 
     systemd.tmpfiles.rules = [
       "d /workspace 0755 snow snow -"
     ];
 
     # Same as a NixOS machine: PATH comes from environment.profiles, not
-    # from writing ~/.bashrc. PROFILE only installs the profile symlink.
+    # from writing ~/.bashrc. PROFILE symlinks HM home-path (user binaries)
+    # when present, else the activation package.
     environment.profiles = lib.mkBefore [ "/nix/var/nix/profiles/snowbox-environment" ];
     environment.sessionVariables.TERM = "xterm-256color";
     environment.sessionVariables.COLORTERM = "truecolor";
@@ -147,8 +160,8 @@
     };
 
     # Window shells. The Daemon bridges a Host WebSocket to this vsock;
-    # the browser never talks to the guest. Each connect is
-    # `runuser -u snow -- /run/current-system/sw/bin/bash -l`.
+    # the browser never talks to the guest. Each connect is a login shell
+    # (login_tty, then execve of snow's passwd shell with argv0 `-bash`).
     systemd.services.snowbox-shell = {
       description = "Snowbox Window shells";
       wantedBy = [ "multi-user.target" ];

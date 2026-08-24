@@ -159,6 +159,8 @@ pub fn reset_dir(vmm: &impl Control, id: Uuid, dest: &str) -> Result<(), String>
     }
 }
 
+/// Broadcast STTY. Windows resize on vsock 53 (see `pty.rs`); do not call
+/// this from the Window PTY path.
 pub fn winsize(vmm: &impl Control, id: Uuid, cols: u16, rows: u16) -> Result<(), String> {
     let mut stream = vmm.vsock(id, AGENT_PORT)?;
     let header = format!("STTY {rows}x{cols}\n");
