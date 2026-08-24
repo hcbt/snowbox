@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use crate::auth::require_token;
+use crate::auth::{require_token, require_ws_origin};
 use crate::cache::Cache;
 use crate::layout::{Layout, LayoutStore};
 use crate::publish::Publisher;
@@ -19,6 +19,12 @@ use crate::resume::Resume;
 use crate::sandbox::{ActionError, Limits, State as SandboxState, Store};
 use crate::templates::Library;
 use crate::vmm::{Hypervisor, SAVE_NAME, StartKind};
+
+pub const LISTEN_PORT: u16 = 5418;
+
+pub fn listen_port() -> u16 {
+    LISTEN_PORT
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -78,8 +84,6 @@ pub struct CopyOutBody {
     pub replace: bool,
 }
 
-
-
 pub fn router(state: AppState) -> Router {
     let v1 = Router::new()
         .route("/health", get(health))
@@ -107,7 +111,10 @@ pub fn router(state: AppState) -> Router {
         .route("/layout", get(get_layout).put(put_layout))
         .route("/sandboxes/{id}/windows", post(open_window))
         .route("/windows/{id}", axum::routing::delete(close_window))
-        .route("/windows/{id}/pty", get(crate::pty::upgrade))
+        .route(
+            "/windows/{id}/pty",
+            get(crate::pty::upgrade).layer(middleware::from_fn(require_ws_origin)),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), require_token));
 
     Router::new().nest("/api/v1", v1).with_state(state)
@@ -163,58 +170,51 @@ async fn start(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    if let Some(vmm) = state.vmm.clone() {
-        let store = state.store.clone();
-        let cache = state.cache.clone();
-        let resume = state.resume.clone();
-        let result = tokio::task::spawn_blocking(move || boot(store, cache, vmm, resume, id))
-            .await
-            .map_err(|_| ActionError::Internal)
-            .and_then(|r| r);
-        return action(result);
-    }
-    action(state.store.start(id))
+    let vmm = hypervisor(&state)?;
+    let store = state.store.clone();
+    let cache = state.cache.clone();
+    let resume = state.resume.clone();
+    let result = tokio::task::spawn_blocking(move || boot(store, cache, vmm, resume, id))
+        .await
+        .map_err(|_| ActionError::Internal)
+        .and_then(|r| r);
+    action(result)
 }
 
 async fn stop(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    if let Some(vmm) = state.vmm.clone() {
-        let store = state.store.clone();
-        let resume = state.resume.clone();
-        state.publish.drop_sandbox(id);
-        state.sessions.drop_sandbox(id);
-        let result = tokio::task::spawn_blocking(move || halt(store, vmm, resume, id, true))
-            .await
-            .map_err(|_| ActionError::Internal)
-            .and_then(|r| r);
-        return action(result);
-    }
-    action(state.store.stop(id))
+    let vmm = hypervisor(&state)?;
+    let store = state.store.clone();
+    let resume = state.resume.clone();
+    state.publish.drop_sandbox(id);
+    state.sessions.drop_sandbox(id);
+    let result = tokio::task::spawn_blocking(move || halt(store, vmm, resume, id, true))
+        .await
+        .map_err(|_| ActionError::Internal)
+        .and_then(|r| r);
+    action(result)
 }
 
 async fn reset(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    if let Some(vmm) = state.vmm.clone() {
+    let sandbox = state.store.get(id).map_err(map_err)?;
+    if sandbox.state == SandboxState::Running {
+        let vmm = hypervisor(&state)?;
+        state.publish.drop_sandbox(id);
+        state.sessions.drop_sandbox(id);
         let store = state.store.clone();
         let resume = state.resume.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let running = store.get(id)?.state == SandboxState::Running;
-            if running {
-                let _ = vmm.stop(id);
-                store.stop(id)?;
-                resume.unmark(id);
-            }
+            halt(store.clone(), vmm, resume, id, true)?;
             store.reset(id)
         })
         .await
         .map_err(|_| ActionError::Internal)
         .and_then(|r| r);
-        state.publish.drop_sandbox(id);
-        state.sessions.drop_sandbox(id);
         return action(result);
     }
     action(state.store.reset(id))
@@ -415,24 +415,16 @@ fn boot(
     id: Uuid,
 ) -> Result<crate::sandbox::Sandbox, ActionError> {
     store.begin_boot(id)?;
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        boot_claimed(&store, &cache, &vmm, id)
-    }));
-    match outcome {
-        Ok(Ok(sandbox)) => {
+    match boot_claimed(&store, &cache, &vmm, id) {
+        Ok(sandbox) => {
             resume.mark(id);
             kick_replenish(vmm, cache, store.root().to_path_buf());
             Ok(sandbox)
         }
-        Ok(Err(err)) => {
+        Err(err) => {
             let _ = vmm.stop(id);
             store.abort_boot(id);
             Err(err)
-        }
-        Err(_) => {
-            let _ = vmm.stop(id);
-            store.abort_boot(id);
-            Err(ActionError::Internal)
         }
     }
 }
@@ -479,7 +471,7 @@ fn boot_claimed(
     if dir.join(crate::vmm::HATCHED).is_file() {
         let _ = crate::agent::reset_dir(vmm, id, "/workspace");
         let _ = crate::agent::reset_dir(vmm, id, "/home/snow");
-        let _ = std::fs::remove_file(dir.join(crate::vmm::HATCHED));
+        forget_hatch_applied(&dir);
     }
     crate::agent::tar_in(vmm, id, "/workspace", &dir.join("workspace"))
         .map_err(ActionError::Failed)?;
@@ -493,6 +485,19 @@ fn boot_claimed(
 
 fn apply_env(store: &Store, cache: &Cache, vmm: &Hypervisor, id: Uuid) -> Result<(), ActionError> {
     apply_env_at(&store.dir(id), cache, vmm, id)
+}
+
+/// Ready-snapshot hatch RESET of /home/snow leaves environment.applied matching
+/// the stamp, so apply_env_at would skip profile. Drop the stamp so a New
+/// Sandbox always activates Environment (devenv on PATH).
+fn forget_hatch_applied(dir: &std::path::Path) -> bool {
+    let hatched = dir.join(crate::vmm::HATCHED);
+    if !hatched.is_file() {
+        return false;
+    }
+    let _ = std::fs::remove_file(dir.join("environment.applied"));
+    let _ = std::fs::remove_file(&hatched);
+    true
 }
 
 fn apply_env_at(
@@ -525,7 +530,8 @@ fn halt(
         return Err(ActionError::Conflict("already stopped"));
     }
     let dir = store.dir(id);
-    let _ = crate::agent::tar_out(&vmm, id, "/workspace", &dir.join("workspace"));
+    crate::agent::tar_out(&vmm, id, "/workspace", &dir.join("workspace"))
+        .map_err(ActionError::Failed)?;
     let _ = crate::agent::tar_out(&vmm, id, "/home/snow", &dir.join("home"));
     let save = dir.join(SAVE_NAME);
     if let Err(e) = vmm.save_and_stop(id, &save) {
@@ -571,6 +577,9 @@ fn warm_once(vmm: &Hypervisor, cache: &Cache, sandboxes: &std::path::Path) -> Re
     run
 }
 
+/// Warm a ready snapshot in the background. Does not auto-start Sandboxes
+/// listed in running.json; Start is a user action that restores that
+/// Sandbox's saved machine state.
 pub fn resume_and_warm(state: AppState) {
     tokio::spawn(async move {
         let Some(vmm) = state.vmm.clone() else {
@@ -626,6 +635,13 @@ async fn save_running(state: AppState) {
     }
 }
 
+fn hypervisor(state: &AppState) -> Result<Arc<Hypervisor>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .vmm
+        .clone()
+        .ok_or_else(|| map_err(ActionError::Failed("no hypervisor".into())))
+}
+
 fn action(
     result: Result<crate::sandbox::Sandbox, ActionError>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
@@ -639,6 +655,9 @@ pub(crate) fn map_err(err: ActionError) -> (StatusCode, Json<serde_json::Value>)
         ActionError::Conflict(detail) => error_body(StatusCode::CONFLICT, "conflict", Some(detail)),
         ActionError::BadRequest(detail) => {
             error_body(StatusCode::BAD_REQUEST, "bad_request", Some(detail))
+        }
+        ActionError::Failed(detail) if detail == "no hypervisor" => {
+            error_body(StatusCode::SERVICE_UNAVAILABLE, "failed", Some(&detail))
         }
         ActionError::Failed(detail) => {
             error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal", Some(&detail))
@@ -665,6 +684,7 @@ mod tests {
     use axum::{
         body::Body,
         http::{Request, StatusCode},
+        response::Html,
     };
     use http_body_util::BodyExt;
     use tower::ServiceExt;
@@ -776,21 +796,23 @@ mod tests {
         assert_eq!(listed["sandboxes"].as_array().unwrap().len(), 1);
 
         let start = format!("http://127.0.0.1/api/v1/sandboxes/{id}/start");
-        let (status, running) = send(
+        let (status, failed) = send(
             make(),
             authed(Request::post(&start)).body(Body::empty()).unwrap(),
         )
         .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(running["state"], "running");
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(failed["error"], "failed");
+        assert_eq!(failed["detail"], "no hypervisor");
 
-        let (status, conflict) = send(
+        let stop = format!("http://127.0.0.1/api/v1/sandboxes/{id}/stop");
+        let (status, failed) = send(
             make(),
-            authed(Request::post(&start)).body(Body::empty()).unwrap(),
+            authed(Request::post(&stop)).body(Body::empty()).unwrap(),
         )
         .await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(conflict["error"], "conflict");
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(failed["error"], "failed");
 
         let reset = format!("http://127.0.0.1/api/v1/sandboxes/{id}/reset");
         let (status, after_reset) = send(
@@ -799,16 +821,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(after_reset["state"], "running");
-
-        let stop = format!("http://127.0.0.1/api/v1/sandboxes/{id}/stop");
-        let (status, stopped) = send(
-            make(),
-            authed(Request::post(&stop)).body(Body::empty()).unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(stopped["state"], "stopped");
+        assert_eq!(after_reset["state"], "stopped");
 
         let url = format!("http://127.0.0.1/api/v1/sandboxes/{id}");
         let (status, _) = send(
@@ -1071,10 +1084,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn two_sandboxes_can_run_at_once() {
+    async fn two_sandboxes_exist_at_once() {
         let (_dir, state) = harness();
         let make = || router(state.clone());
-        let mut ids = Vec::new();
         for name in ["one", "two"] {
             let (status, created) = send(
                 make(),
@@ -1085,17 +1097,7 @@ mod tests {
             )
             .await;
             assert_eq!(status, StatusCode::CREATED);
-            ids.push(created["id"].as_str().unwrap().to_string());
-        }
-        for id in &ids {
-            let start = format!("http://127.0.0.1/api/v1/sandboxes/{id}/start");
-            let (status, running) = send(
-                make(),
-                authed(Request::post(&start)).body(Body::empty()).unwrap(),
-            )
-            .await;
-            assert_eq!(status, StatusCode::OK);
-            assert_eq!(running["state"], "running");
+            assert_eq!(created["state"], "stopped");
         }
         let (status, listed) = send(
             make(),
@@ -1105,13 +1107,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        let running = listed["sandboxes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|s| s["state"] == "running")
-            .count();
-        assert_eq!(running, 2);
+        assert_eq!(listed["sandboxes"].as_array().unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -1158,5 +1154,193 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(std::fs::read_to_string(dest.join("a")).unwrap(), "1");
+    }
+
+    fn with_session(state: AppState) -> Router {
+        router(state.clone()).layer(middleware::from_fn_with_state(
+            state,
+            crate::auth::attach_session,
+        ))
+    }
+
+    #[tokio::test]
+    async fn cookie_not_set_on_unauthenticated_get() {
+        let (_dir, state) = harness();
+        let app = router(state.clone())
+            .fallback(|| async { Html("<html></html>") })
+            .layer(middleware::from_fn_with_state(
+                state,
+                crate::auth::attach_session,
+            ));
+        let response = app
+            .oneshot(
+                Request::get("http://127.0.0.1/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get("set-cookie").is_none());
+    }
+
+    #[tokio::test]
+    async fn cookie_set_on_authenticated_request() {
+        let (_dir, state) = harness();
+        let app = with_session(state);
+        let response = app
+            .oneshot(
+                authed(Request::get("http://127.0.0.1/api/v1/health"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let cookie = response
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(cookie.starts_with("snowbox=test-token;"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Strict"));
+    }
+
+    #[tokio::test]
+    async fn websocket_missing_origin_is_forbidden() {
+        let (_dir, state) = harness();
+        let id = Uuid::nil();
+        let (status, json) = send(
+            router(state),
+            authed(Request::get(format!(
+                "http://127.0.0.1/api/v1/windows/{id}/pty"
+            )))
+            .header("Upgrade", "websocket")
+            .header("Connection", "upgrade")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "13")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(json["error"], "forbidden");
+    }
+
+    #[tokio::test]
+    async fn websocket_daemon_origin_is_not_forbidden() {
+        let (_dir, state) = harness();
+        let id = Uuid::nil();
+        let (status, json) = send(
+            router(state),
+            authed(Request::get(format!(
+                "http://127.0.0.1/api/v1/windows/{id}/pty"
+            )))
+            .header("Upgrade", "websocket")
+            .header("Connection", "upgrade")
+            .header("Origin", format!("http://127.0.0.1:{LISTEN_PORT}"))
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "13")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await;
+        assert_ne!(status, StatusCode::FORBIDDEN);
+        assert_ne!(json["error"], "forbidden");
+    }
+
+    #[tokio::test]
+    async fn websocket_wrong_origin_is_forbidden() {
+        let (_dir, state) = harness();
+        let id = Uuid::nil();
+        let (status, json) = send(
+            router(state),
+            authed(Request::get(format!(
+                "http://127.0.0.1/api/v1/windows/{id}/pty"
+            )))
+            .header("Upgrade", "websocket")
+            .header("Connection", "upgrade")
+            .header("Origin", "http://evil.example:5418")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "13")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(json["error"], "forbidden");
+    }
+
+    #[tokio::test]
+    async fn start_without_hypervisor_fails() {
+        let (_dir, state) = harness();
+        let make = || router(state.clone());
+        let (status, created) = send(
+            make(),
+            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = created["id"].as_str().unwrap();
+        let (status, json) = send(
+            make(),
+            authed(Request::post(format!(
+                "http://127.0.0.1/api/v1/sandboxes/{id}/start"
+            )))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(json["error"], "failed");
+        assert_eq!(json["detail"], "no hypervisor");
+        let got = state.store.get(id.parse().unwrap()).unwrap();
+        assert_eq!(got.state, SandboxState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn reset_while_running_without_hypervisor_fails() {
+        let (_dir, state) = harness();
+        let make = || router(state.clone());
+        let (status, created) = send(
+            make(),
+            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id: Uuid = created["id"].as_str().unwrap().parse().unwrap();
+        state.store.start(id).unwrap();
+        let (status, json) = send(
+            make(),
+            authed(Request::post(format!(
+                "http://127.0.0.1/api/v1/sandboxes/{id}/reset"
+            )))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(json["error"], "failed");
+        assert_eq!(json["detail"], "no hypervisor");
+        assert_eq!(state.store.get(id).unwrap().state, SandboxState::Running);
+    }
+
+    #[test]
+    fn hatch_drops_environment_applied() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("environment.applied"), "stamp").unwrap();
+        std::fs::write(dir.path().join(crate::vmm::HATCHED), b"").unwrap();
+        assert!(forget_hatch_applied(dir.path()));
+        assert!(!dir.path().join("environment.applied").exists());
+        assert!(!dir.path().join(crate::vmm::HATCHED).exists());
+        assert!(!forget_hatch_applied(dir.path()));
     }
 }

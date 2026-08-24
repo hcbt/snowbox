@@ -71,7 +71,7 @@ impl Publisher {
                 return Err(ActionError::Conflict("already published"));
             }
         }
-        let bind = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), host_port.unwrap_or(port));
+        let bind = loopback_bind(host_port);
         let listener = TcpListener::bind(bind)
             .await
             .map_err(|e| ActionError::Failed(format!("bind 127.0.0.1: {e}")))?;
@@ -120,6 +120,10 @@ impl Publisher {
     }
 }
 
+fn loopback_bind(host_port: Option<u16>) -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), host_port.unwrap_or(0))
+}
+
 fn proxy(vmm: Arc<Hypervisor>, sandbox: Uuid, port: u16, incoming: TcpStream) {
     let Ok(mut host) = incoming.into_std() else {
         return;
@@ -159,5 +163,24 @@ mod tests {
             url: "http://127.0.0.1:3000".into(),
         };
         assert!(m.url.starts_with("http://127.0.0.1:"));
+    }
+
+    #[test]
+    fn omitted_host_port_is_ephemeral() {
+        assert_eq!(loopback_bind(None).port(), 0);
+        assert_eq!(loopback_bind(Some(3000)).port(), 3000);
+        assert_ne!(loopback_bind(None).port(), 3000);
+    }
+
+    #[tokio::test]
+    async fn omitted_host_port_binds_ephemeral() {
+        let a = TcpListener::bind(loopback_bind(None)).await.unwrap();
+        let b = TcpListener::bind(loopback_bind(None)).await.unwrap();
+        let pa = a.local_addr().unwrap().port();
+        let pb = b.local_addr().unwrap().port();
+        assert_ne!(pa, 0);
+        assert_ne!(pb, 0);
+        assert_ne!(pa, pb);
+        assert!(a.local_addr().unwrap().ip().is_loopback());
     }
 }

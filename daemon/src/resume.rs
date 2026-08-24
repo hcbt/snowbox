@@ -1,5 +1,7 @@
-//! Which Sandboxes were running when the Daemon last quit.
-//! Start restores those; user Stop drops them from the set.
+//! Which Sandboxes were running when the Daemon last quit, so Quit can
+//! write machine state for those guests. The Daemon does not auto-start
+//! this set. User Start restores that Sandbox's saved machine state.
+//! User Stop drops the id from the set.
 
 use std::collections::HashSet;
 use std::fs;

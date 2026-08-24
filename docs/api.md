@@ -12,7 +12,7 @@ Every `/api/v1` request sends the user token:
 Authorization: Bearer <token>
 ```
 
-The token is a file in the Host config directory (`snowbox/token` under `dirs::config_dir`, e.g. `~/Library/Application Support/snowbox/token` on macOS). The Daemon creates it on first start. Loopback is not authentication. Missing or wrong token → `401` with `{"error":"unauthorized"}`.
+The token is a file in the Host config directory (`snowbox/token` under `dirs::config_dir`, e.g. `~/Library/Application Support/snowbox/token` on macOS). The Daemon creates it on first start with mode `0600`, and tightens an existing file to `0600` if group or other bits are set. Loopback is not authentication. Missing or wrong token → `401` with `{"error":"unauthorized"}`.
 
 ## Sandboxes
 
@@ -24,9 +24,9 @@ The Cache is a Snowbox store under the data directory (`snowbox/cache`), a `file
 
 JSON `state` is `stopped` or `running`. `home` is the allowlist of paths under the guest home that survive Reset. v1 default: `.gitconfig`. `limits` are per-Sandbox CPU count, RAM bytes, and disk bytes. Defaults: 2 CPUs, 2 GiB RAM, 16 GiB disk. Set at create; PATCH later. CPU and RAM take effect at start. Disk is the guest root image size on the Host; growing applies at start, shrinking needs Reset first.
 
-Copy-in and copy-out run only while `stopped` (`409` `sandbox is running` otherwise). Non-empty destination without `"replace": true` → `409` `replace required`. No merge. A directory source is copied as the contents of `/workspace`; a file lands as `/workspace/{filename}`.
+Copy-in and copy-out run only while `stopped` (`409` `sandbox is running` otherwise). Non-empty destination without `"replace": true` → `409` `replace required`. No merge. A directory source is copied as the contents of `/workspace`; a file lands as `/workspace/{filename}`. `from` and `to` are absolute Host paths (`.`/`..` resolved). copy-out `to` cannot be `/`, `/Users`, `/home`, the home directory root, `/etc`, `/nix/store`, or the Snowbox data directory.
 
-Reset restores the system (drops the writable guest disk so the next start is a fresh root), keeps Workspace, keeps the Environment flake, and keeps only allowlisted Home paths.
+Reset restores the system (drops the writable guest disk so the next start is a fresh root), keeps Workspace, keeps the Environment flake, and keeps only allowlisted Home paths. If the Sandbox is running, Stop (sync Workspace, write machine state) runs first, then Reset.
 
 | Method | Path | Meaning |
 | --- | --- | --- |
@@ -38,15 +38,15 @@ Reset restores the system (drops the writable guest disk so the next start is a 
 | `GET` | `/agent-options` | home-manager Agent option schema the hatch renders. |
 | `GET` | `/sandboxes/{id}` | One record. `404` if missing |
 | `PATCH` | `/sandboxes/{id}` | Update Limits. Body `{"limits":{"cpu":4,"ram":4294967296,"disk":34359738368}}` — any field optional. Applied on the next start. `404` if missing |
-| `POST` | `/sandboxes/{id}/start` | `stopped` → `running`. Restores machine state when present, otherwise boots. `409` if already running |
-| `POST` | `/sandboxes/{id}/stop` | `running` → `stopped`. Writes machine state; disk kept. `409` if already stopped |
-| `POST` | `/sandboxes/{id}/reset` | Keep Workspace + Home allowlist; restore system. `404` if missing |
+| `POST` | `/sandboxes/{id}/start` | `stopped` → `running`. Restores machine state when present, otherwise boots. `409` if already running. No hypervisor → `503` `failed` |
+| `POST` | `/sandboxes/{id}/stop` | `running` → `stopped`. Syncs Workspace to the Host, then writes machine state; disk kept. Workspace sync failure → Stop fails and the Sandbox stays running. `409` if already stopped. No hypervisor → `503` `failed` |
+| `POST` | `/sandboxes/{id}/reset` | Keep Workspace + Home allowlist; restore system. Running: halt (Workspace sync + save) first. `404` if missing |
 | `POST` | `/sandboxes/{id}/copy-in` | Body `{"from":"/host/path","replace":false}` |
 | `POST` | `/sandboxes/{id}/copy-out` | Body `{"to":"/host/path","replace":false}` |
 | `GET` | `/sandboxes/{id}/environment` | Current home-manager Agent config (`config.json`). |
 | `PUT` | `/sandboxes/{id}/environment` | Replace that config. Updates the Host Environment. If the Sandbox is running, realises into the Cache and activates (no reboot). |
 | `GET` | `/sandboxes/{id}/publish` | Published ports for this Sandbox. Empty while none. |
-| `POST` | `/sandboxes/{id}/publish` | Body `{"port":3000,"host_port":null}`. Bind `127.0.0.1` only. Sandbox must be running. `201` `{port,host_port,url}`. |
+| `POST` | `/sandboxes/{id}/publish` | Body `{"port":3000,"host_port":null}`. Bind `127.0.0.1` only. Omitted or null `host_port` binds an ephemeral Host port; the response `host_port` is the assigned port. Sandbox must be running. `201` `{port,host_port,url}`. |
 | `DELETE` | `/sandboxes/{id}/publish/{port}` | Drop a published port. `204` |
 | `DELETE` | `/sandboxes/{id}` | Destroy. Deletes the disk. Allowed in either state. `404` if missing |
 
@@ -77,9 +77,9 @@ Sandbox object:
 
 List is `{"sandboxes":[...]}`.
 
-Errors: `{"error":"<code>"}` with optional `"detail"`. Codes: `unauthorized`, `not_found`, `conflict`, `bad_request`, `internal`.
+Errors: `{"error":"<code>"}` with optional `"detail"`. Codes: `unauthorized`, `not_found`, `conflict`, `bad_request`, `internal`, `failed`, `forbidden`.
 
-Same-origin Canvas requests may send the token as cookie `snowbox` instead of `Authorization`. The Daemon sets that cookie on every response.
+Same-origin Canvas requests may send the token as cookie `snowbox` instead of `Authorization`. The Daemon sets that cookie only on responses to requests that already presented a valid Bearer token or cookie. Unauthenticated `GET /` does not mint the cookie. The served Canvas HTML includes `window.__SNOWBOX_TOKEN__` so the SPA can send `Authorization: Bearer`.
 
 ## Layout and Windows
 
@@ -91,7 +91,7 @@ The Canvas is a client of this API. Layout is Host-side JSON the Daemon persists
 | `PUT` | `/layout` | Replace Layout (geometry, iconify, Icon Manager). |
 | `POST` | `/sandboxes/{id}/windows` | Open a Window on that Sandbox. `201` |
 | `DELETE` | `/windows/{id}` | Close. Ends that shell. `204` |
-| `GET` | `/windows/{id}/pty` | WebSocket. Binary PTY I/O. `409` if the Sandbox is not running. |
+| `GET` | `/windows/{id}/pty` | WebSocket. Binary PTY I/O. `409` if the Sandbox is not running. Upgrade requires `Origin` `http://127.0.0.1:<port>` or `http://localhost:<port>` for this Daemon; missing or wrong Origin → `403`. |
 
 Layout object:
 
