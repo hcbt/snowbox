@@ -188,11 +188,56 @@ fn wait_result(
 }
 
 #[cfg(target_os = "macos")]
+fn attach_hvc0(
+    config: &objc2_virtualization::VZVirtualMachineConfiguration,
+    sandbox_dir: &Path,
+) -> Result<(), String> {
+    use std::os::fd::IntoRawFd;
+
+    use objc2::AnyThread;
+    use objc2::rc::Retained;
+    use objc2_foundation::{NSArray, NSFileHandle, NSString};
+    use objc2_virtualization::{
+        VZFileHandleSerialPortAttachment, VZVirtioConsoleDeviceConfiguration,
+        VZVirtioConsolePortConfiguration,
+    };
+
+    let log = sandbox_dir.join("console.log");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)
+        .map_err(|e| format!("console.log: {e}"))?;
+    let fd = file.into_raw_fd();
+    unsafe {
+        let write = NSFileHandle::initWithFileDescriptor(NSFileHandle::alloc(), fd);
+        let attach = VZFileHandleSerialPortAttachment::initWithFileHandleForReading_fileHandleForWriting(
+            VZFileHandleSerialPortAttachment::alloc(),
+            None,
+            Some(&write),
+        );
+        let port = VZVirtioConsolePortConfiguration::new();
+        port.setIsConsole(true);
+        port.setName(Some(&NSString::from_str("org.snowbox.console")));
+        let attach: Retained<objc2_virtualization::VZSerialPortAttachment> =
+            Retained::into_super(attach);
+        port.setAttachment(Some(&attach));
+        let console = VZVirtioConsoleDeviceConfiguration::new();
+        console.ports().setObject_atIndexedSubscript(Some(&port), 0);
+        config.setConsoleDevices(&NSArray::from_retained_slice(&[Retained::into_super(
+            console,
+        )]));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 fn make_config(
     runtime: &Runtime,
     sandbox_dir: &Path,
     limits: Limits,
     mac_id: Uuid,
+    console: bool,
 ) -> Result<objc2::rc::Retained<objc2_virtualization::VZVirtualMachineConfiguration>, String> {
     use objc2::AnyThread;
     use objc2::rc::Retained;
@@ -263,9 +308,11 @@ fn make_config(
             VZVirtioSocketDeviceConfiguration::new(),
         )]));
 
-        // No serial: a new file-handle each Start makes restore fail with
-        // invalid argument. Kernel logs are not needed for machine state.
-        let _ = sandbox_dir;
+        // Virtio console (hvc0) only on cold boot. A new file handle each
+        // Start makes restore fail with invalid argument.
+        if console {
+            attach_hvc0(&config, sandbox_dir)?;
+        }
 
         config
             .validateWithError()
@@ -296,7 +343,7 @@ fn start_vm(
     if !is_supported() {
         return Err("virtualization is not supported on this Host".into());
     }
-    let config = make_config(runtime, sandbox_dir, limits, mac_id)?;
+    let config = make_config(runtime, sandbox_dir, limits, mac_id, true)?;
     let (tx, rx) = mpsc::channel::<Result<(), String>>();
     let config_ptr = Retained::into_raw(config) as usize;
     dispatch2::DispatchQueue::main().exec_async(move || {
@@ -354,7 +401,7 @@ fn restore_vm(
     if !save.is_file() {
         return Err("no machine state".into());
     }
-    let config = make_config(runtime, sandbox_dir, limits, mac_id)?;
+    let config = make_config(runtime, sandbox_dir, limits, mac_id, false)?;
     unsafe {
         config
             .validateSaveRestoreSupportWithError()

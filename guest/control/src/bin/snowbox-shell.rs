@@ -13,7 +13,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn run() -> std::io::Result<()> {
-    let listener = snowbox_guest::vsock::VsockListener::bind(53)?;
+    let listener = snowbox_guest::vsock::bind_retry(53)?;
     loop {
         let stream = listener.accept()?;
         std::thread::spawn(move || {

@@ -460,7 +460,7 @@ fn boot_claimed(
     let t1 = std::time::Instant::now();
     let ready_for = match kind {
         StartKind::Restored => std::time::Duration::from_secs(8),
-        StartKind::Cold => std::time::Duration::from_secs(90),
+        StartKind::Cold => std::time::Duration::from_secs(180),
     };
     if let Err(e) = crate::agent::wait_ready(vmm, id, ready_for) {
         if kind == StartKind::Restored {
@@ -469,7 +469,7 @@ fn boot_claimed(
             let _ = std::fs::remove_file(dir.join(SAVE_NAME));
             vmm.start_cold(id, &dir, sandbox.limits)
                 .map_err(ActionError::Failed)?;
-            crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(90))
+            crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(180))
                 .map_err(ActionError::Failed)?;
         } else {
             return Err(ActionError::Failed(e));
@@ -559,7 +559,7 @@ fn warm_once(vmm: &Hypervisor, cache: &Cache, sandboxes: &std::path::Path) -> Re
         std::fs::create_dir_all(&dir).map_err(|e| format!("warm mkdir: {e}"))?;
         crate::environment::write_default(&dir).map_err(|e| e.to_string())?;
         vmm.start_cold(id, &dir, Limits::default())?;
-        crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(90))?;
+        crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(180))?;
         apply_env_at(&dir, cache, vmm, id).map_err(|e| e.to_string())?;
         vmm.save_and_stop(id, &dir.join(SAVE_NAME))?;
         Ok::<(), String>(())

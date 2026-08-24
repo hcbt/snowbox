@@ -245,6 +245,14 @@ fn bake_ready(sandbox_dir: &Path, runtime: &Path) {
     if !(src_save.is_file() && src_disk.is_file() && src_ident.is_file()) {
         return;
     }
+    let current = runtime
+        .canonicalize()
+        .unwrap_or_else(|_| runtime.to_path_buf());
+    let stamped = std::fs::read_to_string(sandbox_dir.join("runtime.src")).unwrap_or_default();
+    if stamped.trim() != current.to_string_lossy() {
+        eprintln!("ready snapshot: skip bake (disk is a different runtime)");
+        return;
+    }
     let dest = ready_dir(sandbox_dir, runtime);
     let tmp = dest.with_extension("tmp");
     let _ = std::fs::remove_dir_all(&tmp);
@@ -398,6 +406,14 @@ mod tests {
         }
     }
 
+    fn stamp_runtime(dir: &Path, runtime: &Path) {
+        let key = runtime
+            .canonicalize()
+            .unwrap_or_else(|_| runtime.to_path_buf());
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("runtime.src"), key.to_string_lossy().as_bytes()).unwrap();
+    }
+
     #[test]
     fn start_boots_when_there_is_no_save() {
         let dir = tempfile::tempdir().unwrap();
@@ -502,6 +518,7 @@ mod tests {
         std::fs::write(a.join(SAVE_NAME), b"save").unwrap();
         std::fs::write(a.join("machine.ident"), b"ident").unwrap();
         std::fs::write(a.join("environment.applied"), b"stamp").unwrap();
+        stamp_runtime(&a, &rt.rootfs);
         bake_ready(&a, &rt.rootfs);
 
         let b = dir.path().join("b");
@@ -533,6 +550,7 @@ mod tests {
         std::fs::create_dir_all(sb.join("disk")).unwrap();
         std::fs::write(sb.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
         std::fs::write(sb.join("machine.ident"), b"ident").unwrap();
+        stamp_runtime(&sb, &rt.rootfs);
         let save = sb.join(SAVE_NAME);
         std::fs::write(&save, b"save").unwrap();
         hv.save_and_stop(Uuid::from_u128(7), &save).unwrap();
@@ -551,6 +569,7 @@ mod tests {
         std::fs::write(a.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
         std::fs::write(a.join(SAVE_NAME), b"save").unwrap();
         std::fs::write(a.join("machine.ident"), b"ident").unwrap();
+        stamp_runtime(&a, &rt.rootfs);
         bake_ready(&a, &rt.rootfs);
 
         let b = dir.path().join("b");
@@ -581,6 +600,7 @@ mod tests {
         std::fs::write(a.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
         std::fs::write(a.join(SAVE_NAME), b"save").unwrap();
         std::fs::write(a.join("machine.ident"), b"ident").unwrap();
+        stamp_runtime(&a, &rt.rootfs);
         bake_ready(&a, &rt.rootfs);
 
         let fake = Fake::new();
@@ -613,6 +633,7 @@ mod tests {
         std::fs::write(a.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
         std::fs::write(a.join(SAVE_NAME), b"save").unwrap();
         std::fs::write(a.join("machine.ident"), b"ident").unwrap();
+        stamp_runtime(&a, &rt.rootfs);
         bake_ready(&a, &rt.rootfs);
 
         let sb = dir.path().join("sb");
@@ -640,6 +661,7 @@ mod tests {
         std::fs::write(sb.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
         std::fs::write(sb.join("machine.ident"), b"ident").unwrap();
         std::fs::write(sb.join(SAVE_NAME), b"save").unwrap();
+        stamp_runtime(&sb, &rt.rootfs);
         hv.save_and_stop(Uuid::from_u128(12), &sb.join(SAVE_NAME))
             .unwrap();
         assert!(!stale.exists());
@@ -658,6 +680,7 @@ mod tests {
         std::fs::write(sb.join("disk").join("root.raw"), vec![0u8; 64]).unwrap();
         std::fs::write(sb.join("machine.ident"), b"ident").unwrap();
         std::fs::write(sb.join(SAVE_NAME), b"save").unwrap();
+        stamp_runtime(&sb, &rt.rootfs);
         assert!(!hv.ready_snapshot_exists(dir.path()));
         hv.save_and_stop(Uuid::from_u128(11), &sb.join(SAVE_NAME))
             .unwrap();

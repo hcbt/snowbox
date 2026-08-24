@@ -34,13 +34,13 @@ pub(crate) fn prepare_disk(
             ensure_runtime_template(runtime_rootfs, &template)?;
             clone_or_copy(&template, &root)?;
         }
-        let mut perms = std::fs::metadata(&root)
-            .map_err(|e| format!("stat rootfs: {e}"))?
-            .permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        perms.set_readonly(false);
-        std::fs::set_permissions(&root, perms).map_err(|e| format!("chmod rootfs: {e}"))?;
     }
+    let mut perms = std::fs::metadata(&root)
+        .map_err(|e| format!("stat rootfs: {e}"))?
+        .permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(&root, perms).map_err(|e| format!("chmod rootfs: {e}"))?;
     let len = std::fs::metadata(&root)
         .map_err(|e| format!("stat disk: {e}"))?
         .len();
@@ -56,6 +56,10 @@ pub(crate) fn prepare_disk(
             .map_err(|e| format!("open disk: {e}"))?;
         file.set_len(disk).map_err(|e| format!("grow disk: {e}"))?;
     }
+    let key = runtime_rootfs
+        .canonicalize()
+        .unwrap_or_else(|_| runtime_rootfs.to_path_buf());
+    let _ = std::fs::write(sandbox_dir.join("runtime.src"), key.to_string_lossy().as_bytes());
     Ok(root)
 }
 
@@ -77,6 +81,11 @@ fn ensure_runtime_template(src: &Path, template: &Path) -> Result<(), String> {
     std::fs::rename(&tmp, template).map_err(|e| format!("install rootfs template: {e}"))?;
     std::fs::write(&key_path, key.to_string_lossy().as_bytes())
         .map_err(|e| format!("write rootfs template key: {e}"))?;
+    // Snapshots baked from a previous runtime's disk must not be restored
+    // under this one (kernel cmdline init= would miss the store path).
+    if let Some(parent) = template.parent() {
+        let _ = std::fs::remove_dir_all(parent.join(".ready"));
+    }
     Ok(())
 }
 

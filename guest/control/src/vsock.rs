@@ -10,6 +10,24 @@ pub struct VsockListener {
     fd: OwnedFd,
 }
 
+/// Bind, retrying while virtio-vsock is still probing.
+pub fn bind_retry(port: u32) -> io::Result<VsockListener> {
+    let mut last = None;
+    for attempt in 0..120 {
+        match VsockListener::bind(port) {
+            Ok(listener) => return Ok(listener),
+            Err(e) => {
+                if attempt % 20 == 0 {
+                    eprintln!("vsock bind {port}: {e}; retrying");
+                }
+                last = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| io::Error::other("vsock bind failed")))
+}
+
 impl VsockListener {
     pub fn bind(port: u32) -> io::Result<Self> {
         let fd = unsafe { libc::socket(AF_VSOCK, SOCK_STREAM, 0) };

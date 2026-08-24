@@ -13,11 +13,18 @@ pub fn handle_socket(stream: UnixStream) -> io::Result<()> {
     ws.ws_col = 80;
     let (master, slave) = openpty(&ws)?;
 
-    // util-linux: `runuser -u user` requires a command and cannot take --login.
-    // `runuser -l user` is the su-compatible login form: shell from passwd.
+    // NixOS does not provide /bin/bash. passwd and /etc/shells point at
+    // /run/current-system/sw/bin/bash (bashInteractive). `runuser -u`
+    // requires a command; `bash -l` is the login shell.
     let mut child = unsafe {
         Command::new("runuser")
-            .args(["-l", "snow"])
+            .args([
+                "-u",
+                "snow",
+                "--",
+                "/run/current-system/sw/bin/bash",
+                "-l",
+            ])
             .stdin(Stdio::from(slave.try_clone()?))
             .stdout(Stdio::from(slave.try_clone()?))
             .stderr(Stdio::from(slave))

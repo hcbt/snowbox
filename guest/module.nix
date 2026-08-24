@@ -37,6 +37,7 @@
       "ext4"
     ];
     boot.kernelModules = [
+      "virtio_console"
       "vmw_vsock_virtio_transport"
       "vsock"
     ];
@@ -91,8 +92,8 @@
       isNormalUser = true;
       extraGroups = [ "wheel" ];
       home = "/home/snow";
-      # Login shell for Windows. Written to passwd; snowbox-shell runs
-      # `runuser -l snow` (su-compatible login, not `runuser -u`).
+      # Login shell for Windows. Written to passwd as
+      # /run/current-system/sw/bin/bash. NixOS has no /bin/bash.
       shell = pkgs.bashInteractive;
     };
     users.users.root.hashedPassword = "!";
@@ -127,7 +128,10 @@
     systemd.services.snowbox-agent = {
       description = "Snowbox control plane";
       wantedBy = [ "multi-user.target" ];
-      after = [ "local-fs.target" ];
+      after = [
+        "local-fs.target"
+        "systemd-modules-load.service"
+      ];
       serviceConfig = {
         ExecStart = "${lib.getExe' config.snowbox.control "snowbox-agent"}";
         Restart = "always";
@@ -143,12 +147,15 @@
     };
 
     # Window shells. The Daemon bridges a Host WebSocket to this vsock;
-    # the browser never talks to the guest. Each connect is a login shell
-    # for snow (closing the Window ends that shell).
+    # the browser never talks to the guest. Each connect is
+    # `runuser -u snow -- /run/current-system/sw/bin/bash -l`.
     systemd.services.snowbox-shell = {
       description = "Snowbox Window shells";
       wantedBy = [ "multi-user.target" ];
-      after = [ "local-fs.target" ];
+      after = [
+        "local-fs.target"
+        "systemd-modules-load.service"
+      ];
       serviceConfig = {
         ExecStart = "${lib.getExe' config.snowbox.control "snowbox-shell"}";
         Restart = "always";
