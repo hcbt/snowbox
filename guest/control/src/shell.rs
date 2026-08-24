@@ -126,7 +126,7 @@ mod linux {
         let argv0 = CString::new(login_argv0(shell_str))?;
         let argv = [argv0.as_ptr(), std::ptr::null()];
         unsafe {
-            libc::execve(shell.as_ptr(), argv.as_ptr(), environ());
+            libc::execve(shell.as_ptr(), argv.as_ptr(), envp());
         }
         Err(io::Error::last_os_error())
     }
@@ -145,16 +145,12 @@ mod linux {
         setenv(key, v.as_c_str())
     }
 
-    fn environ() -> *const *const libc::c_char {
-        unsafe { environ_ptr() }
-    }
-
     unsafe extern "C" {
         static environ: *const *const libc::c_char;
     }
 
-    unsafe fn environ_ptr() -> *const *const libc::c_char {
-        environ
+    fn envp() -> *const *const libc::c_char {
+        unsafe { environ }
     }
 
     fn set_winsize(master: &File, rows: u16, cols: u16) -> io::Result<()> {

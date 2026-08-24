@@ -12,7 +12,15 @@
         pkgs.rustPlatform.buildRustPackage {
           pname = "snowbox-guest";
           version = "0.0.0";
-          src = ./control;
+          src = lib.cleanSourceWith {
+            src = ./control;
+            filter =
+              path: type:
+              let
+                base = baseNameOf path;
+              in
+              base != "target" && !(lib.hasInfix "/target/" path);
+          };
           cargoLock.lockFile = ./control/Cargo.lock;
           doCheck = true;
         };
