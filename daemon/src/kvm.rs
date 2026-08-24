@@ -124,7 +124,7 @@ pub fn qemu_args(
         "-initrd".into(),
         initrd,
         "-append".into(),
-        runtime.cmdline.clone(),
+        runtime.boot_cmdline(),
         "-drive".into(),
         format!("file={disk},if=virtio,format=raw"),
         "-netdev".into(),

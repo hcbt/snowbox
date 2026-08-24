@@ -29,7 +29,15 @@ pub fn handle_socket(stream: UnixStream) -> io::Result<()> {
             .stdout(Stdio::from(slave.try_clone()?))
             .stderr(Stdio::from(slave))
             .pre_exec(|| {
+                // Session leader + controlling tty so bash job control works.
+                // (socat used pty,setsid,ctty; setsid alone is not enough.)
                 if libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::ioctl(0, libc::TIOCSCTTY, 0 as *const libc::c_void) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::tcsetpgrp(0, libc::getpid()) < 0 {
                     return Err(io::Error::last_os_error());
                 }
                 Ok(())

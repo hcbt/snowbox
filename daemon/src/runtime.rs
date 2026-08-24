@@ -19,6 +19,19 @@ impl Runtime {
         }
         None
     }
+
+    /// Kernel command line from the runtime dir. Re-read so a rebuilt
+    /// `guest/result` symlink does not keep a stale `init=` in memory
+    /// while kernel/initrd already follow the link.
+    pub fn boot_cmdline(&self) -> String {
+        self.kernel
+            .parent()
+            .map(|dir| dir.join("cmdline"))
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| self.cmdline.clone())
+    }
 }
 
 fn load(dir: &Path) -> Option<Runtime> {
@@ -76,5 +89,7 @@ mod tests {
         std::fs::write(dir.path().join("cmdline"), "console=hvc0\n").unwrap();
         let rt = load(dir.path()).unwrap();
         assert_eq!(rt.cmdline, "console=hvc0");
+        std::fs::write(dir.path().join("cmdline"), "console=hvc0 init=/new\n").unwrap();
+        assert_eq!(rt.boot_cmdline(), "console=hvc0 init=/new");
     }
 }

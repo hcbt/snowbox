@@ -272,7 +272,7 @@ fn make_config(
         let boot_loader =
             VZLinuxBootLoader::initWithKernelURL(VZLinuxBootLoader::alloc(), &nsurl(kernel));
         boot_loader.setInitialRamdiskURL(Some(&nsurl(initrd)));
-        boot_loader.setCommandLine(&NSString::from_str(&runtime.cmdline));
+        boot_loader.setCommandLine(&NSString::from_str(&runtime.boot_cmdline()));
 
         let config = VZVirtualMachineConfiguration::new();
         config.setPlatform(&platform);
