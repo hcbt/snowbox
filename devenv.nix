@@ -1,6 +1,10 @@
-# Host-side shell. Everyday utilities are pinned so `nix develop` /
-# `devenv shell` do not fall through to Homebrew.
-{ pkgs, ... }:
+{
+  pkgs,
+  lib,
+  config,
+  inputs,
+  ...
+}:
 let
   guestSystem =
     if pkgs.stdenv.hostPlatform.isDarwin then "aarch64-linux" else pkgs.stdenv.hostPlatform.system;
@@ -24,13 +28,14 @@ let
   '';
 in
 {
-  languages.rust.enable = true;
+  # https://devenv.sh/basics/
+  env.GREET = "devenv";
+  env.LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+  # uv uses the nix-provided Python; never download an interpreter.
+  env.UV_PYTHON_DOWNLOADS = "never";
+  env.UV_PYTHON_PREFERENCE = "only-system";
 
-  # Bun is the JS toolchain for the Canvas (ADR 0021). Do not fall through
-  # to a host node/npm. bun.install waits until there is a package.json.
-  languages.javascript.enable = true;
-  languages.javascript.bun.enable = true;
-
+  # https://devenv.sh/packages/
   packages = [
     pkgs.git
     pkgs.gh
@@ -42,21 +47,60 @@ in
     pkgs.pkg-config
     pkgs.nix.dev
     pkgs.llvmPackages.libclang
+    pkgs.bun
   ]
   ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.qemu ];
 
-  env.LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+  # https://devenv.sh/languages/
+  languages.rust.enable = true;
 
+  # Canvas is TypeScript, built with Bun (ADR 0021). devenv nests bun under
+  # languages.javascript, which we do not enable; bun is in packages.
+  languages.typescript.enable = true;
+
+  # Python 3.12; uv manages the packages.
+  languages.python = {
+    enable = true;
+    package = pkgs.python312;
+    uv.enable = true;
+  };
+
+  # https://devenv.sh/processes/
   processes.snowbox.exec = stack;
+
+  # https://devenv.sh/services/
+  # services.postgres.enable = true;
+
+  # https://devenv.sh/scripts/
+  scripts.hello.exec = ''
+    echo hello from $GREET
+  '';
   scripts.snowbox.exec = stack;
-
   scripts.canvas.exec = "cd canvas && bun install && bun run build";
-
   # Guest runtime tracks nixpkgs-unstable. Darwin builds aarch64-linux through
   # linux-builder; Linux builds the host architecture. The Daemon looks
   # at guest/result or SNOWBOX_RUNTIME.
   scripts.guest.exec = "nix build path:./guest#packages.${guestSystem}.runtime --out-link guest/result";
 
+  # https://devenv.sh/basics/
+  enterShell = ''
+    hello         # Run scripts directly
+    git --version # Use packages
+  '';
+
+  # https://devenv.sh/tasks/
+  # tasks = {
+  #   "myproj:setup".exec = "mytool build";
+  #   "devenv:enterShell".after = [ "myproj:setup" ];
+  # };
+
+  # https://devenv.sh/tests/
+  enterTest = ''
+    echo "Running tests"
+    git --version | grep --color=auto "${pkgs.git.version}"
+  '';
+
+  # https://devenv.sh/git-hooks/
   git-hooks.package = pkgs.prek;
   git-hooks.hooks = {
     nixfmt-rfc-style.enable = true;
@@ -67,9 +111,10 @@ in
     end-of-file-fixer.enable = true;
     trim-trailing-whitespace.enable = true;
   };
-
   git-hooks.excludes = [
     "^LICENSE$"
     "\\.lock$"
   ];
+
+  # See full reference at https://devenv.sh/reference/options/
 }
