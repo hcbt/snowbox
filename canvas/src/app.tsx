@@ -143,7 +143,13 @@ export function App() {
   return (
     <div
       class="relative h-full w-full bg-x11"
-      onContextMenu={(e) => openMenu(e)}
+      onContextMenu={(e) => {
+        if (e.target === e.currentTarget) {
+          setFocus(null);
+          setPicked(null);
+        }
+        openMenu(e);
+      }}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) setMenu(null);
       }}
