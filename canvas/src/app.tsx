@@ -5,6 +5,7 @@ import { RootMenu } from "./menu";
 import { OverlayDialog } from "./dialogs";
 import { placeOverlay, type MenuPos, type Overlay } from "./overlay";
 import { api, type Layout, type Sandbox, type WindowRec } from "./api";
+import { sandboxesWithoutWindows } from "./sandbox-icons";
 
 function focusTerm(id: string): void {
   const el = document.querySelector(`[data-win="${id}"] textarea.xterm-helper-textarea`);
@@ -149,10 +150,15 @@ export function App() {
     >
       <IconManager
         layout={layout()}
+        sandboxes={sandboxes()}
         focus={focus()}
         live={live}
         busy={busy()}
         openMenu={openMenu}
+        pickSandbox={(id) => {
+          setPicked(id);
+          setFocus(null);
+        }}
         patchWin={patchWin}
         raise={raise}
         run={run}
@@ -238,10 +244,12 @@ function StatusLine(props: { busy: boolean; status: string }) {
 
 function IconManager(props: {
   layout: Layout;
+  sandboxes: Sandbox[];
   focus: string | null;
   live: (id: string) => boolean;
   busy: boolean;
   openMenu: (e: MouseEvent, windowId?: string) => void;
+  pickSandbox: (id: string) => void;
   patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
   raise: (id: string) => void;
   run: (fn: () => Promise<void>) => Promise<boolean>;
@@ -285,6 +293,31 @@ function IconManager(props: {
                 onContextMenu={(e) => props.openMenu(e, w().id)}
               >
                 {w().title}
+              </button>
+            )}
+          </For>
+          <For
+            each={sandboxesWithoutWindows(props.sandboxes, props.layout.windows)}
+            keyed={(s) => s.id}
+          >
+            {(s) => (
+              <button
+                type="button"
+                class="block w-full border-0 border-t border-twm-line bg-twm px-2 py-0.5 text-left font-bold text-twm-muted hover:bg-twm-hi hover:text-white"
+                onClick={() => {
+                  props.pickSandbox(s().id);
+                  if (props.busy) return;
+                  props.run(async () => {
+                    if (s().state !== "running") await api.start(s().id);
+                    await api.openWindow(s().id);
+                  });
+                }}
+                onContextMenu={(e) => {
+                  props.pickSandbox(s().id);
+                  props.openMenu(e);
+                }}
+              >
+                {s().name} ({s().state})
               </button>
             )}
           </For>
