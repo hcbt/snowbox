@@ -1,0 +1,623 @@
+import { For, Show, createSignal, onSettled } from "solid-js";
+import { Frame } from "./frame";
+import {
+  api,
+  isJsonObject,
+  type AgentProgram,
+  type EnvProgram,
+  type EnvironmentDoc,
+  type Json,
+  type JsonObject,
+  type Published,
+  type Sandbox,
+  type Template,
+} from "./api";
+import { overlayZ, type Overlay } from "./overlay";
+
+const field =
+  "mt-0.5 w-full box-border border border-neutral-600 px-1 py-0.5 font-mono text-[13px]";
+const label = "mt-1.5 block font-bold";
+
+function overlayTitle(ov: Overlay, sandboxName: string): string {
+  switch (ov.kind) {
+    case "sandbox":
+      return "New Sandbox";
+    case "sandboxes":
+      return "Sandboxes";
+    case "limits":
+      return `Limits — ${sandboxName}`;
+    case "hatch":
+      return `Hatch — ${sandboxName}`;
+    case "save-template":
+      return `Save ${sandboxName} as Template`;
+    case "publish":
+      return `Publish — ${sandboxName}`;
+    case "destroy":
+      return `Destroy ${sandboxName}`;
+    case "reset":
+      return `Reset ${sandboxName}`;
+    case "copy":
+      return ov.dir === "in" ? `Copy in — ${sandboxName}` : `Copy out — ${sandboxName}`;
+  }
+}
+
+function parseSettings(text: string): JsonObject | undefined {
+  try {
+    // SAFETY: JSON.parse is untyped; isJsonObject is the parser at this boundary.
+    const parsed = JSON.parse(text || "{}") as Json | null;
+    if (!isJsonObject(parsed)) return undefined;
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+export function OverlayDialog(props: {
+  overlay: Overlay;
+  sandbox?: Sandbox;
+  sandboxes: Sandbox[];
+  move: (x: number, y: number) => void;
+  pickSandbox: (id: string) => void;
+  close: () => void;
+  run: (fn: () => Promise<void>, done?: string) => Promise<boolean>;
+}) {
+  const [name, setName] = createSignal("");
+  const [cpu, setCpu] = createSignal(String(props.sandbox?.limits.cpu ?? 2));
+  const [ram, setRam] = createSignal(
+    String((props.sandbox?.limits.ram ?? 2147483648) / (1024 * 1024)),
+  );
+  const [disk, setDisk] = createSignal(
+    String((props.sandbox?.limits.disk ?? 17179869184) / (1024 * 1024 * 1024)),
+  );
+  const [tpl, setTpl] = createSignal("empty");
+  const [templates, setTemplates] = createSignal<Template[]>([]);
+  const [agents, setAgents] = createSignal<AgentProgram[]>([]);
+  const [envDoc, setEnvDoc] = createSignal<EnvironmentDoc>({});
+  const [envCfg, setEnvCfg] = createSignal<{ [name: string]: EnvProgram }>({});
+  const [path, setPath] = createSignal("");
+  const [pubPort, setPubPort] = createSignal("3000");
+  const [hostPort, setHostPort] = createSignal("");
+  const [published, setPublished] = createSignal<Published[]>([]);
+  const [replace, setReplace] = createSignal(false);
+
+  onSettled(() => {
+    loadOverlay(props.overlay, props.sandbox, {
+      setTemplates,
+      setPublished,
+      setAgents,
+      setEnvDoc,
+      setEnvCfg,
+    });
+  });
+
+  const sbName = () => props.sandbox?.name ?? "";
+
+  const submit = () =>
+    submitOverlay(props, {
+      name: name(),
+      tpl: tpl(),
+      cpu: cpu(),
+      ram: ram(),
+      disk: disk(),
+      path: path(),
+      pubPort: pubPort(),
+      hostPort: hostPort(),
+      replace: replace(),
+      envDoc: envDoc(),
+      envCfg: envCfg(),
+      setPublished,
+    });
+
+  return (
+    <Frame
+      title={overlayTitle(props.overlay, sbName())}
+      x={props.overlay.x}
+      y={props.overlay.y}
+      z={overlayZ}
+      onMove={props.move}
+      onClose={props.close}
+    >
+      <form
+        class="min-w-80 bg-white px-3.5 py-3 font-twm text-black"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <OverlayFields
+          overlay={props.overlay}
+          sandboxName={sbName()}
+          sandboxes={props.sandboxes}
+          name={name()}
+          setName={setName}
+          tpl={tpl()}
+          setTpl={setTpl}
+          templates={templates()}
+          cpu={cpu()}
+          setCpu={setCpu}
+          ram={ram()}
+          setRam={setRam}
+          disk={disk()}
+          setDisk={setDisk}
+          path={path()}
+          setPath={setPath}
+          pubPort={pubPort()}
+          setPubPort={setPubPort}
+          hostPort={hostPort()}
+          setHostPort={setHostPort}
+          published={published()}
+          replace={replace()}
+          setReplace={setReplace}
+          agents={agents()}
+          envCfg={envCfg()}
+          setEnvCfg={setEnvCfg}
+          pickSandbox={props.pickSandbox}
+          run={props.run}
+        />
+        <Show when={props.overlay.kind !== "sandboxes"}>
+          <div class="mt-3 flex justify-end gap-2">
+            <button
+              type="button"
+              class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
+              onClick={props.close}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
+            >
+              {submitLabel(props.overlay.kind, sbName())}
+            </button>
+          </div>
+        </Show>
+      </form>
+    </Frame>
+  );
+}
+
+function submitLabel(kind: Overlay["kind"], sandboxName: string): string {
+  if (kind === "destroy") return `Destroy ${sandboxName}`;
+  if (kind === "reset") return `Reset ${sandboxName}`;
+  return "OK";
+}
+
+function loadOverlay(
+  overlay: Overlay,
+  sandbox: Sandbox | undefined,
+  set: {
+    setTemplates: (t: Template[]) => void;
+    setPublished: (p: Published[]) => void;
+    setAgents: (a: AgentProgram[]) => void;
+    setEnvDoc: (d: EnvironmentDoc) => void;
+    setEnvCfg: (c: { [name: string]: EnvProgram }) => void;
+  },
+): void {
+  if (overlay.kind === "sandbox" || overlay.kind === "save-template") {
+    api
+      .templates()
+      .then((r) => set.setTemplates(r.templates))
+      .catch(() => {});
+  }
+  if (overlay.kind === "publish" && sandbox) {
+    api
+      .published(sandbox.id)
+      .then((r) => set.setPublished(r.published))
+      .catch(() => {});
+  }
+  if (overlay.kind !== "hatch" || !sandbox) return;
+  const id = sandbox.id;
+  Promise.all([api.agentOptions(), api.environment(id)])
+    .then(([opts, cfg]) => {
+      set.setAgents(opts.programs);
+      set.setEnvDoc(cfg);
+      set.setEnvCfg(cfg.programs ?? {});
+    })
+    .catch(() => {});
+}
+
+async function submitOverlay(
+  props: {
+    overlay: Overlay;
+    sandbox?: Sandbox;
+    close: () => void;
+    run: (fn: () => Promise<void>, done?: string) => Promise<boolean>;
+  },
+  form: {
+    name: string;
+    tpl: string;
+    cpu: string;
+    ram: string;
+    disk: string;
+    path: string;
+    pubPort: string;
+    hostPort: string;
+    replace: boolean;
+    envDoc: EnvironmentDoc;
+    envCfg: { [name: string]: EnvProgram };
+    setPublished: (p: Published[]) => void;
+  },
+): Promise<void> {
+  const ov = props.overlay;
+  if (ov.kind === "sandboxes") {
+    props.close();
+    return;
+  }
+  if (ov.kind === "save-template" && !form.name.trim()) return;
+
+  let ok = false;
+  if (ov.kind === "sandbox") {
+    ok = await props.run(async () => {
+      const sb = await api.create(form.name || undefined, form.tpl || undefined);
+      await api.start(sb.id);
+      await api.openWindow(sb.id);
+    });
+  } else if (ov.kind === "save-template") {
+    ok = await props.run(() => api.saveTemplate(form.name.trim(), ov.id).then(() => undefined));
+  } else if (ov.kind === "publish") {
+    const host = form.hostPort.trim();
+    await props.run(async () => {
+      const pub = await api.publish(ov.id, Number(form.pubPort), host ? Number(host) : undefined);
+      const list = await api.published(ov.id);
+      const rows = list.published.some((p) => p.url === pub.url)
+        ? list.published
+        : [...list.published, pub];
+      form.setPublished(rows);
+    });
+    return;
+  } else if (ov.kind === "limits") {
+    ok = await props.run(() =>
+      api
+        .patchLimits(ov.id, {
+          cpu: Number(form.cpu),
+          ram: Number(form.ram) * 1024 * 1024,
+          disk: Number(form.disk) * 1024 * 1024 * 1024,
+        })
+        .then(() => undefined),
+    );
+  } else if (ov.kind === "hatch") {
+    const running = props.sandbox?.state === "running";
+    ok = await props.run(
+      () =>
+        api.saveEnvironment(ov.id, { ...form.envDoc, programs: form.envCfg }).then(() => undefined),
+      running ? "" : "applies on Start",
+    );
+  } else if (ov.kind === "copy") {
+    ok = await props.run(() =>
+      ov.dir === "in"
+        ? api.copyIn(ov.id, form.path, form.replace).then(() => undefined)
+        : api.copyOut(ov.id, form.path, form.replace).then(() => undefined),
+    );
+  } else if (ov.kind === "destroy") {
+    ok = await props.run(() => api.destroy(ov.id));
+  } else if (ov.kind === "reset") {
+    ok = await props.run(() => api.reset(ov.id).then(() => undefined));
+  }
+  if (ok) props.close();
+}
+
+function OverlayFields(props: {
+  overlay: Overlay;
+  sandboxName: string;
+  sandboxes: Sandbox[];
+  name: string;
+  setName: (v: string) => void;
+  tpl: string;
+  setTpl: (v: string) => void;
+  templates: Template[];
+  cpu: string;
+  setCpu: (v: string) => void;
+  ram: string;
+  setRam: (v: string) => void;
+  disk: string;
+  setDisk: (v: string) => void;
+  path: string;
+  setPath: (v: string) => void;
+  pubPort: string;
+  setPubPort: (v: string) => void;
+  hostPort: string;
+  setHostPort: (v: string) => void;
+  published: Published[];
+  replace: boolean;
+  setReplace: (v: boolean) => void;
+  agents: AgentProgram[];
+  envCfg: { [name: string]: EnvProgram };
+  setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
+  pickSandbox: (id: string) => void;
+  run: (fn: () => Promise<void>, done?: string) => Promise<boolean>;
+}) {
+  const ov = () => props.overlay;
+  return (
+    <>
+      <Show when={ov().kind === "sandboxes"}>
+        <SandboxList sandboxes={props.sandboxes} pick={props.pickSandbox} />
+      </Show>
+      <Show when={ov().kind === "destroy"}>
+        <p class="text-[13px]">
+          Destroy {props.sandboxName}? Workspace is gone unless copy-out already happened.
+        </p>
+      </Show>
+      <Show when={ov().kind === "reset"}>
+        <p class="text-[13px]">
+          Reset {props.sandboxName}? Declared Agents and devenv stay. Undeclared tools are gone.
+          Workspace and Home remain.
+        </p>
+      </Show>
+      <Show when={ov().kind === "sandbox"}>
+        <NewSandboxFields
+          name={props.name}
+          setName={props.setName}
+          tpl={props.tpl}
+          setTpl={props.setTpl}
+          templates={props.templates}
+        />
+      </Show>
+      <Show when={ov().kind === "save-template"}>
+        <label class={label}>
+          name
+          <input
+            class={field}
+            value={props.name}
+            onInput={(e) => props.setName(e.currentTarget.value)}
+          />
+        </label>
+      </Show>
+      <Show when={ov().kind === "publish"}>
+        <PublishFields
+          overlay={ov()}
+          published={props.published}
+          pubPort={props.pubPort}
+          setPubPort={props.setPubPort}
+          hostPort={props.hostPort}
+          setHostPort={props.setHostPort}
+          run={props.run}
+        />
+      </Show>
+      <Show when={ov().kind === "limits"}>
+        <LimitsFields
+          cpu={props.cpu}
+          setCpu={props.setCpu}
+          ram={props.ram}
+          setRam={props.setRam}
+          disk={props.disk}
+          setDisk={props.setDisk}
+        />
+      </Show>
+      <Show when={ov().kind === "hatch"}>
+        <HatchFields agents={props.agents} envCfg={props.envCfg} setEnvCfg={props.setEnvCfg} />
+      </Show>
+      <Show when={ov().kind === "copy"}>
+        <label class={label}>
+          host path
+          <input
+            class={field}
+            value={props.path}
+            onInput={(e) => props.setPath(e.currentTarget.value)}
+          />
+        </label>
+        <label class="mt-2 flex items-center gap-2 font-bold">
+          <input
+            type="checkbox"
+            checked={props.replace}
+            onChange={(e) => props.setReplace(e.currentTarget.checked)}
+          />
+          replace
+        </label>
+      </Show>
+    </>
+  );
+}
+
+function SandboxList(props: { sandboxes: Sandbox[]; pick: (id: string) => void }) {
+  return (
+    <div class="max-h-64 overflow-y-auto border border-neutral-400">
+      <For
+        each={props.sandboxes}
+        keyed={(s) => s.id}
+        fallback={<div class="px-2 py-1 text-[12px]">no Sandboxes</div>}
+      >
+        {(s) => (
+          <button
+            type="button"
+            class="block w-full border-0 border-t border-neutral-300 bg-white px-2 py-1 text-left hover:bg-twm-hi hover:text-white"
+            onClick={() => props.pick(s().id)}
+          >
+            <span class="font-bold">{s().name}</span>
+            <span class="ml-2 text-[12px]">{s().state}</span>
+          </button>
+        )}
+      </For>
+    </div>
+  );
+}
+
+function NewSandboxFields(props: {
+  name: string;
+  setName: (v: string) => void;
+  tpl: string;
+  setTpl: (v: string) => void;
+  templates: Template[];
+}) {
+  return (
+    <>
+      <label class={label}>
+        name
+        <input
+          class={field}
+          value={props.name}
+          onInput={(e) => props.setName(e.currentTarget.value)}
+        />
+      </label>
+      <label class={label}>
+        template
+        <select
+          class={`${field} bg-white text-black`}
+          value={props.tpl}
+          onChange={(e) => props.setTpl(e.currentTarget.value)}
+        >
+          <option value="empty">empty</option>
+          <For each={props.templates.filter((t) => t.name !== "empty")} keyed={(t) => t.name}>
+            {(t) => (
+              <option value={t().name}>
+                {t().name}
+                {t().shipped ? "" : " (saved)"}
+              </option>
+            )}
+          </For>
+        </select>
+      </label>
+    </>
+  );
+}
+
+function PublishFields(props: {
+  overlay: Overlay;
+  published: Published[];
+  pubPort: string;
+  setPubPort: (v: string) => void;
+  hostPort: string;
+  setHostPort: (v: string) => void;
+  run: (fn: () => Promise<void>) => Promise<boolean>;
+}) {
+  return (
+    <>
+      <For each={props.published} keyed={(p) => p.port}>
+        {(p) => (
+          <div class="flex items-center justify-between gap-2 text-[12px]">
+            <a class="min-w-0 truncate text-twm" href={p().url}>
+              {p().url}
+            </a>
+            <span>:{p().port}</span>
+            <button
+              type="button"
+              class="border border-twm-line bg-twm px-2 py-0.5 font-bold text-white"
+              onClick={() => {
+                const ov = props.overlay;
+                if (ov.kind !== "publish") return;
+                const port = p().port;
+                void props.run(async () => {
+                  await api.unpublish(ov.id, port);
+                });
+              }}
+            >
+              Unpublish
+            </button>
+          </div>
+        )}
+      </For>
+      <label class={label}>
+        sandbox port
+        <input
+          class={field}
+          value={props.pubPort}
+          onInput={(e) => props.setPubPort(e.currentTarget.value)}
+        />
+      </label>
+      <label class={label}>
+        host port (optional)
+        <input
+          class={field}
+          value={props.hostPort}
+          onInput={(e) => props.setHostPort(e.currentTarget.value)}
+        />
+      </label>
+    </>
+  );
+}
+
+function LimitsFields(props: {
+  cpu: string;
+  setCpu: (v: string) => void;
+  ram: string;
+  setRam: (v: string) => void;
+  disk: string;
+  setDisk: (v: string) => void;
+}) {
+  return (
+    <>
+      <label class={label}>
+        cpu
+        <input
+          class={field}
+          value={props.cpu}
+          onInput={(e) => props.setCpu(e.currentTarget.value)}
+        />
+      </label>
+      <label class={label}>
+        ram (MiB)
+        <input
+          class={field}
+          value={props.ram}
+          onInput={(e) => props.setRam(e.currentTarget.value)}
+        />
+      </label>
+      <label class={label}>
+        disk (GiB)
+        <input
+          class={field}
+          value={props.disk}
+          onInput={(e) => props.setDisk(e.currentTarget.value)}
+        />
+      </label>
+    </>
+  );
+}
+
+function HatchFields(props: {
+  agents: AgentProgram[];
+  envCfg: { [name: string]: EnvProgram };
+  setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
+}) {
+  return (
+    <>
+      <p class="text-[12px]">devenv is always in the Environment. Secrets stay out of the flake.</p>
+      <For
+        each={props.agents}
+        keyed={(p) => p.name}
+        fallback={<div class="text-[12px]">no Agents</div>}
+      >
+        {(p) => {
+          const name = p().name;
+          const cur = () => props.envCfg[name] ?? {};
+          const enabled = () => Boolean(cur().enable);
+          const settings = () => JSON.stringify(cur().settings ?? {}, null, 2);
+          return (
+            <div class="mt-2 border-t border-neutral-300 pt-2">
+              <label class="flex items-center gap-2 font-bold">
+                <input
+                  type="checkbox"
+                  checked={enabled()}
+                  onChange={(e) => {
+                    const on = e.currentTarget.checked;
+                    props.setEnvCfg({
+                      ...props.envCfg,
+                      [name]: { ...cur(), enable: on },
+                    });
+                  }}
+                />
+                {name}
+              </label>
+              <div class="text-[11px] text-neutral-600">{p().description}</div>
+              <label class={label}>
+                settings
+                <textarea
+                  class={`${field} h-24`}
+                  value={settings()}
+                  onChange={(e) => {
+                    const parsed = parseSettings(e.currentTarget.value);
+                    if (!parsed) return;
+                    props.setEnvCfg({
+                      ...props.envCfg,
+                      [name]: { ...cur(), settings: parsed },
+                    });
+                  }}
+                />
+              </label>
+            </div>
+          );
+        }}
+      </For>
+    </>
+  );
+}

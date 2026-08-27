@@ -4,13 +4,27 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { json } from "./api";
 
-export function Term(props: {
-  windowId: string;
-  active?: boolean;
-  onActivate?: () => void;
-}) {
-  let host!: HTMLDivElement;
+type PtyFrame = string | ArrayBuffer | ArrayBufferView;
+
+function isTextFrame(data: PtyFrame): data is string {
+  return typeof data === "string";
+}
+
+function wsBytes(data: PtyFrame): string | Uint8Array {
+  if (isTextFrame(data)) return data;
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  return "";
+}
+
+export function Term(props: { windowId: string; active?: boolean; onActivate?: () => void }) {
+  let host: HTMLDivElement | undefined;
   let term: Terminal | undefined;
+  const setHost = (el: HTMLDivElement) => {
+    host = el;
+  };
 
   const grab = (e: Event) => {
     e.stopPropagation();
@@ -19,6 +33,8 @@ export function Term(props: {
   };
 
   onSettled(() => {
+    const el = host;
+    if (!el) return;
     const t = new Terminal({
       cols: 80,
       rows: 24,
@@ -37,7 +53,7 @@ export function Term(props: {
     term = t;
     const fit = new FitAddon();
     t.loadAddon(fit);
-    t.open(host);
+    t.open(el);
 
     let dropped = false;
     let ws: WebSocket | undefined;
@@ -52,7 +68,7 @@ export function Term(props: {
     });
     t.onResize(() => sendSize());
     const ro = new ResizeObserver(() => fit.fit());
-    ro.observe(host);
+    ro.observe(el);
 
     const proto = location.protocol === "https:" ? "wss" : "ws";
     // Mint the session cookie (browsers cannot set Authorization on
@@ -71,11 +87,8 @@ export function Term(props: {
           if (props.active !== false) t.focus();
         };
         sock.onmessage = (ev) => {
-          if (typeof ev.data === "string") {
-            t.write(ev.data);
-            return;
-          }
-          t.write(new Uint8Array(ev.data as ArrayBuffer));
+          // SAFETY: binaryType is arraybuffer; browsers send string or ArrayBuffer.
+          t.write(wsBytes(ev.data as PtyFrame));
         };
         sock.onclose = () => {
           if (!dropped) t.write("\r\n[window closed]\r\n");
@@ -107,7 +120,7 @@ export function Term(props: {
 
   return (
     <div
-      ref={host}
+      ref={setHost}
       data-win={props.windowId}
       class="h-full w-full bg-white"
       onPointerDown={grab}

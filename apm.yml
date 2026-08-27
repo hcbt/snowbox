@@ -1,0 +1,20 @@
+name: snowbox
+version: 1.0.0
+description: Host-side coding-agent skills for developing Snowbox
+author: hcbt
+# pkgs.apm-cli in this pin is 0.21.0; grok-build / agent-skills are not in that
+# catalog yet. Copilot deploys skills to .agents/skills for other clones.
+targets:
+- copilot
+compilation:
+  agents_md:
+    mode: managed_section
+    start_marker: <!-- apm:start -->
+    end_marker: <!-- apm:end -->
+dependencies:
+  apm:
+  - mattpocock/skills#6654f6b6
+  - dmmulroy/anti-slop#6d538555
+  mcp: []
+includes: auto
+scripts: {}

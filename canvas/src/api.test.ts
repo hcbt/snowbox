@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { api, json } from "./api";
+import { api, empty, json } from "./api";
 
 const originalFetch = globalThis.fetch;
 
@@ -7,25 +7,38 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function stubFetch(
-  handler: (url: string, init?: RequestInit) => Response,
-) {
+function requestUrl(input: RequestInfo | URL): string {
+  if (isRequestString(input)) return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+function isRequestString(input: RequestInfo | URL): input is string {
+  return typeof input === "string";
+}
+
+function stubFetch(handler: (url: string, init?: RequestInit) => Response) {
   const fn = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    return handler(url, init);
+    return handler(requestUrl(input), init);
   });
-  globalThis.fetch = fn as unknown as typeof fetch;
+  // SAFETY: bun:test mock matches fetch's callable shape; we restore originalFetch in afterEach.
+  globalThis.fetch = fn as typeof fetch;
   return fn;
 }
 
 describe("Bearer", () => {
   test("req sends Authorization from window.__SNOWBOX_TOKEN__", async () => {
+    // SAFETY: test-only stub of window for the session token read.
     const g = globalThis as typeof globalThis & { window?: Window };
+    // SAFETY: test-only Window with the token the Canvas injects.
     g.window = { __SNOWBOX_TOKEN__: "abc123" } as Window;
     const fn = stubFetch((_url, init) => {
       const h = new Headers(init?.headers);
       expect(h.get("authorization")).toBe("Bearer abc123");
-      return new Response(null, { status: 204 });
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     });
     await json("/api/v1/health");
     expect(fn).toHaveBeenCalled();
@@ -33,10 +46,10 @@ describe("Bearer", () => {
   });
 });
 
-describe("json", () => {
-  test("204 success returns undefined without parsing a body", async () => {
+describe("json / empty", () => {
+  test("204 success returns without parsing a body", async () => {
     const fn = stubFetch(() => new Response(null, { status: 204 }));
-    await expect(json("/api/v1/windows/w1", { method: "DELETE" })).resolves.toBeUndefined();
+    await expect(empty("/api/v1/windows/w1", { method: "DELETE" })).resolves.toBeUndefined();
     expect(fn).toHaveBeenCalled();
   });
 
@@ -48,7 +61,7 @@ describe("json", () => {
           headers: { "content-type": "application/json" },
         }),
     );
-    await expect(json("/api/v1/sandboxes/sb1", { method: "DELETE" })).rejects.toThrow(
+    await expect(empty("/api/v1/sandboxes/sb1", { method: "DELETE" })).rejects.toThrow(
       "sandbox gone",
     );
   });
@@ -61,12 +74,12 @@ describe("json", () => {
           headers: { "content-type": "application/json" },
         }),
     );
-    await expect(json("/x", { method: "DELETE" })).rejects.toThrow("conflict");
+    await expect(empty("/x", { method: "DELETE" })).rejects.toThrow("conflict");
   });
 
   test("DELETE !ok with empty body throws statusText", async () => {
     stubFetch(() => new Response(null, { status: 404, statusText: "Not Found" }));
-    await expect(json("/x", { method: "DELETE" })).rejects.toThrow("Not Found");
+    await expect(empty("/x", { method: "DELETE" })).rejects.toThrow("Not Found");
   });
 });
 

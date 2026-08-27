@@ -48,6 +48,9 @@ in
     pkgs.nix.dev
     pkgs.llvmPackages.libclang
     pkgs.bun
+    pkgs.apm-cli
+    pkgs.oxlint
+    pkgs.oxfmt
   ]
   ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.qemu ];
 
@@ -110,10 +113,18 @@ in
     check-added-large-files.enable = true;
     end-of-file-fixer.enable = true;
     trim-trailing-whitespace.enable = true;
+    oxlint.enable = true;
+    oxlint.files = "^canvas/src/.*\\.(js|jsx|ts|tsx)$";
+    oxlint.settings.configPath = "./.oxlintrc.json";
+    oxfmt.enable = true;
+    oxfmt.files = "^canvas/src/.*\\.(js|jsx|ts|tsx)$";
+    oxfmt.settings.mode = "check";
   };
   git-hooks.excludes = [
     "^LICENSE$"
     "\\.lock$"
+    "^canvas/tools/"
+    "^apm_modules/"
   ];
 
   # See full reference at https://devenv.sh/reference/options/

@@ -24,3 +24,8 @@ Snowbox runs a coding Agent inside an isolated Nix-built Linux Sandbox on the Ho
 - Daemon API is `127.0.0.1` plus a token. Loopback is not auth. Contract: [docs/api.md](docs/api.md).
 - SSH and editor-remote are Unix side effects, not product features.
 - Do not put personal tracker identifiers (issue IDs, private board URLs, git branch names generated from those IDs) in this public repo.
+- Canvas lint is oxlint (`.oxlintrc.json` at the repo root). Format with oxfmt from devenv. `@oxlint/plugins` is the only Canvas bun lint dependency.
+
+<!-- apm:start -->
+<!-- apm will insert content here -->
+<!-- apm:end -->

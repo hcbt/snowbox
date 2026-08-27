@@ -1,31 +1,39 @@
 import { For, Show, createSignal, onSettled } from "solid-js";
 import { Term } from "./term";
 import { Frame } from "./frame";
-import {
-  api,
-  type AgentProgram,
-  type Layout,
-  type Published,
-  type Sandbox,
-  type Template,
-  type WindowRec,
-} from "./api";
+import { RootMenu } from "./menu";
+import { OverlayDialog } from "./dialogs";
+import { placeOverlay, type MenuPos, type Overlay } from "./overlay";
+import { api, type Layout, type Sandbox, type WindowRec } from "./api";
 
-type Overlay =
-  | null
-  | { kind: "sandbox"; x: number; y: number }
-  | { kind: "sandboxes"; x: number; y: number }
-  | { kind: "limits"; id: string; x: number; y: number }
-  | { kind: "hatch"; id: string; x: number; y: number }
-  | { kind: "save-template"; id: string; x: number; y: number }
-  | { kind: "publish"; id: string; x: number; y: number }
-  | { kind: "copy"; id: string; dir: "in" | "out"; x: number; y: number }
-  | { kind: "destroy"; id: string; x: number; y: number }
-  | { kind: "reset"; id: string; x: number; y: number };
+function focusTerm(id: string): void {
+  const el = document.querySelector(`[data-win="${id}"] textarea.xterm-helper-textarea`);
+  if (el instanceof HTMLTextAreaElement) {
+    el.focus({ preventScroll: true });
+  }
+}
 
-type Menu = { x: number; y: number } | null;
-
-const overlayZ = 50000;
+function dragOffset(
+  e: MouseEvent,
+  origin: { x: number; y: number },
+  onMove: (x: number, y: number) => void,
+  onEnd: () => void,
+): void {
+  e.preventDefault();
+  e.stopPropagation();
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const move = (ev: MouseEvent) => {
+    onMove(origin.x + ev.clientX - startX, origin.y + ev.clientY - startY);
+  };
+  const up = () => {
+    window.removeEventListener("mousemove", move);
+    window.removeEventListener("mouseup", up);
+    onEnd();
+  };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+}
 
 export function App() {
   const [sandboxes, setSandboxes] = createSignal<Sandbox[]>([]);
@@ -35,8 +43,8 @@ export function App() {
   });
   const [focus, setFocus] = createSignal<string | null>(null);
   const [picked, setPicked] = createSignal<string | null>(null);
-  const [menu, setMenu] = createSignal<Menu>(null);
-  const [overlay, setOverlay] = createSignal<Overlay>(null);
+  const [menu, setMenu] = createSignal<MenuPos | null>(null);
+  const [overlay, setOverlay] = createSignal<Overlay | null>(null);
   const [status, setStatus] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [ready, setReady] = createSignal(false);
@@ -78,9 +86,7 @@ export function App() {
   const patchWin = (id: string, patch: Partial<WindowRec>, persist = false) => {
     const next: Layout = {
       ...layout(),
-      windows: layout().windows.map((w) =>
-        w.id === id ? { ...w, ...patch } : w,
-      ),
+      windows: layout().windows.map((w) => (w.id === id ? { ...w, ...patch } : w)),
     };
     setLayout(next);
     if (persist) save(next);
@@ -96,13 +102,6 @@ export function App() {
     return undefined;
   };
 
-  const focusTerm = (id: string) => {
-    const el = document.querySelector(
-      `[data-win="${id}"] textarea.xterm-helper-textarea`,
-    ) as HTMLTextAreaElement | null;
-    el?.focus({ preventScroll: true });
-  };
-
   const raise = (id: string) => {
     setFocus(id);
     const win = layout().windows.find((w) => w.id === id);
@@ -115,7 +114,7 @@ export function App() {
     queueMicrotask(() => focusTerm(id));
   };
 
-  const run = async (fn: () => Promise<unknown>, done = "") => {
+  const run = async (fn: () => Promise<void>, done = "") => {
     setBusy(true);
     setStatus("");
     try {
@@ -138,32 +137,7 @@ export function App() {
     setMenu({ x: e.clientX, y: e.clientY });
   };
 
-  const placeOverlay = (x = 220, y = 56) => ({ x, y });
-
-  const dragIcons = (e: MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const { x, y } = layout().icon_manager;
-    const move = (ev: MouseEvent) => {
-      setLayout({
-        ...layout(),
-        icon_manager: {
-          ...layout().icon_manager,
-          x: x + ev.clientX - startX,
-          y: y + ev.clientY - startY,
-        },
-      });
-    };
-    const up = () => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-      save(layout());
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-  };
+  const openOverlay = (next: Overlay) => setOverlay(next);
 
   return (
     <div
@@ -173,702 +147,309 @@ export function App() {
         if (e.target === e.currentTarget) setMenu(null);
       }}
     >
-      <Show when={layout().icon_manager.visible}>
-        <div
-          class="absolute min-w-40 bg-twm"
-          style={{
-            left: `${layout().icon_manager.x}px`,
-            top: `${layout().icon_manager.y}px`,
-            "z-index": 99990,
-          }}
-          onContextMenu={(e) => openMenu(e)}
-        >
-          <div
-            class="flex h-5 cursor-grab items-center gap-1.5 bg-twm px-[3px] text-[13px] font-bold text-white"
-            onMouseDown={dragIcons}
-          >
-            <span class="size-3 shrink-0 border border-white bg-twm-hi" />
-            <span class="flex-1">Icon Manager</span>
-          </div>
-          <div class="border-x-2 border-b-2 border-twm">
-            <For each={layout().windows} keyed={(w) => w.id}>
-              {(w) => (
-                <button
-                  type="button"
-                  class="block w-full border-0 border-t border-twm-line bg-twm px-2 py-0.5 text-left font-bold text-white hover:bg-twm-hi"
-                  classList={{
-                    "bg-twm-hi": focus() === w().id,
-                    "text-twm-muted": !live(w().sandbox),
-                  }}
-                  onClick={() => {
-                    patchWin(w().id, { iconified: false }, true);
-                    raise(w().id);
-                    if (!live(w().sandbox) && !busy()) run(() => api.start(w().sandbox));
-                  }}
-                  onContextMenu={(e) => openMenu(e, w().id)}
-                >
-                  {w().title}
-                </button>
-              )}
-            </For>
-          </div>
-        </div>
-      </Show>
-
-      <For each={layout().windows} keyed={(w) => w.id}>
-        {(w) => (
-          <Show when={!w().iconified}>
-            <Frame
-              title={w().title}
-              x={w().x}
-              y={w().y}
-              w={w().w}
-              h={w().h}
-              z={w().z}
-              dataWin={w().id}
-              onMouseDown={() => {
-                raise(w().id);
-                if (!live(w().sandbox) && !busy()) run(() => api.start(w().sandbox));
-              }}
-              onContextMenu={(e) => openMenu(e, w().id)}
-              onMove={(x, y) => patchWin(w().id, { x, y })}
-              onMoveEnd={() => save(layout())}
-              onResize={(nw, nh) => patchWin(w().id, { w: nw, h: nh })}
-              onIconify={() => patchWin(w().id, { iconified: true }, true)}
-            >
-              <Show
-                when={live(w().sandbox)}
-                fallback={
-                  <div class="flex h-full items-center justify-center font-twm text-[13px] text-neutral-500">
-                    stopped — Start {sandboxes().find((s) => s.id === w().sandbox)?.name ?? "this Sandbox"}
-                  </div>
-                }
-              >
-                <Term
-                  windowId={w().id}
-                  active={focus() === w().id}
-                  onActivate={() => raise(w().id)}
-                />
-              </Show>
-            </Frame>
-          </Show>
-        )}
-      </For>
-
+      <IconManager
+        layout={layout()}
+        focus={focus()}
+        live={live}
+        busy={busy()}
+        openMenu={openMenu}
+        patchWin={patchWin}
+        raise={raise}
+        run={run}
+        drag={(e) =>
+          dragOffset(
+            e,
+            layout().icon_manager,
+            (x, y) =>
+              setLayout({
+                ...layout(),
+                icon_manager: { ...layout().icon_manager, x, y },
+              }),
+            () => save(layout()),
+          )
+        }
+      />
+      <CanvasWindows
+        layout={layout()}
+        sandboxes={sandboxes()}
+        focus={focus()}
+        live={live}
+        busy={busy()}
+        openMenu={openMenu}
+        patchWin={patchWin}
+        raise={raise}
+        run={run}
+        save={() => save(layout())}
+      />
       <Show when={menu()}>
-        <RootMenu
-          x={menu()!.x}
-          y={menu()!.y}
-          sandbox={targetSandbox()}
-          window={focusedWindow()}
-          iconMgr={layout().icon_manager.visible}
-          onNewSandbox={() => setOverlay({ kind: "sandbox", ...placeOverlay() })}
-          onSandboxes={() => setOverlay({ kind: "sandboxes", ...placeOverlay() })}
-          onSaveTemplate={() => {
-            const sb = targetSandbox();
-            if (sb) setOverlay({ kind: "save-template", id: sb.id, ...placeOverlay() });
-          }}
-          onNewWindow={() => {
-            const sb = targetSandbox();
-            if (!sb || sb.state !== "running") {
-              setStatus("Start that Sandbox first");
-              return;
-            }
-            run(async () => {
-              await api.openWindow(sb.id);
-            });
-          }}
-          onIconify={() => {
-            const id = focus();
-            if (id) patchWin(id, { iconified: true }, true);
-          }}
-          onRaise={() => {
-            const id = focus();
-            if (id) raise(id);
-          }}
-          onLower={() => {
-            const id = focus();
-            if (id) patchWin(id, { z: 1 }, true);
-          }}
-          onCloseWindow={() => {
-            const id = focus();
-            if (id) run(() => api.closeWindow(id));
-          }}
-          onStart={() => {
-            const sb = targetSandbox();
-            if (sb) run(() => api.start(sb.id));
-          }}
-          onStop={() => {
-            const sb = targetSandbox();
-            if (sb) run(() => api.stop(sb.id));
-          }}
-          onDestroy={() => {
-            const sb = targetSandbox();
-            if (sb) setOverlay({ kind: "destroy", id: sb.id, ...placeOverlay() });
-          }}
-          onReset={() => {
-            const sb = targetSandbox();
-            if (sb) setOverlay({ kind: "reset", id: sb.id, ...placeOverlay() });
-          }}
-          onToggleIcons={() =>
-            save({
-              ...layout(),
-              icon_manager: {
-                ...layout().icon_manager,
-                visible: !layout().icon_manager.visible,
-              },
-            })
-          }
-          onLimits={() => {
-            const sb = targetSandbox();
-            if (sb) setOverlay({ kind: "limits", id: sb.id, ...placeOverlay() });
-          }}
-          onHatch={() => {
-            const sb = targetSandbox();
-            if (sb) setOverlay({ kind: "hatch", id: sb.id, ...placeOverlay() });
-          }}
-          onPublish={() => {
-            const sb = targetSandbox();
-            if (sb) setOverlay({ kind: "publish", id: sb.id, ...placeOverlay() });
-          }}
-          onCopy={(dir) => {
-            const sb = targetSandbox();
-            if (sb) setOverlay({ kind: "copy", id: sb.id, dir, ...placeOverlay() });
-          }}
-          close={() => setMenu(null)}
-        />
+        {(pos) => (
+          <AppMenu
+            pos={pos()}
+            sandbox={targetSandbox()}
+            window={focusedWindow()}
+            iconMgr={layout().icon_manager.visible}
+            layout={layout()}
+            focus={focus()}
+            setOverlay={openOverlay}
+            setMenu={setMenu}
+            setStatus={setStatus}
+            patchWin={patchWin}
+            raise={raise}
+            run={run}
+            save={save}
+          />
+        )}
       </Show>
-
       <Show when={overlay()}>
-        <OverlayDialog
-          overlay={overlay()!}
-          sandbox={sandboxes().find((s) => {
-            const ov = overlay();
-            return ov !== null && "id" in ov && s.id === ov.id;
-          })}
-          sandboxes={sandboxes()}
-          move={(x, y) => {
-            const ov = overlay();
-            if (ov) setOverlay({ ...ov, x, y });
-          }}
-          pickSandbox={(id) => {
-            setPicked(id);
-            setFocus(null);
-            setOverlay(null);
-          }}
-          close={() => setOverlay(null)}
-          run={run}
-        />
+        {(ov) => (
+          <OverlayDialog
+            overlay={ov()}
+            sandbox={sandboxes().find((s) => "id" in ov() && s.id === ov().id)}
+            sandboxes={sandboxes()}
+            move={(x, y) => setOverlay({ ...ov(), x, y })}
+            pickSandbox={(id) => {
+              setPicked(id);
+              setFocus(null);
+              setOverlay(null);
+            }}
+            close={() => setOverlay(null)}
+            run={run}
+          />
+        )}
       </Show>
-
-      <div
-        class="pointer-events-none fixed bottom-2 left-2 px-2 py-0.5 font-mono text-xs font-bold"
-        classList={{
-          "bg-twm text-white": busy() || status().length > 0,
-          "text-black": !busy() && status().length === 0,
-        }}
-      >
-        {busy() ? status() || "working…" : status()}
-      </div>
+      <StatusLine busy={busy()} status={status()} />
     </div>
   );
 }
 
-function RootMenu(props: {
-  x: number;
-  y: number;
+function StatusLine(props: { busy: boolean; status: string }) {
+  return (
+    <div
+      class="pointer-events-none fixed bottom-2 left-2 px-2 py-0.5 font-mono text-xs font-bold"
+      classList={{
+        "bg-twm text-white": props.busy || props.status.length > 0,
+        "text-black": !props.busy && props.status.length === 0,
+      }}
+    >
+      {props.busy ? props.status || "working…" : props.status}
+    </div>
+  );
+}
+
+function IconManager(props: {
+  layout: Layout;
+  focus: string | null;
+  live: (id: string) => boolean;
+  busy: boolean;
+  openMenu: (e: MouseEvent, windowId?: string) => void;
+  patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
+  raise: (id: string) => void;
+  run: (fn: () => Promise<void>) => Promise<boolean>;
+  drag: (e: MouseEvent) => void;
+}) {
+  return (
+    <Show when={props.layout.icon_manager.visible}>
+      <div
+        class="absolute min-w-40 bg-twm"
+        style={{
+          left: `${props.layout.icon_manager.x}px`,
+          top: `${props.layout.icon_manager.y}px`,
+          "z-index": 99990,
+        }}
+        onContextMenu={(e) => props.openMenu(e)}
+      >
+        <div
+          class="flex h-5 cursor-grab items-center gap-1.5 bg-twm px-[3px] text-[13px] font-bold text-white"
+          onMouseDown={props.drag}
+        >
+          <span class="size-3 shrink-0 border border-white bg-twm-hi" />
+          <span class="flex-1">Icon Manager</span>
+        </div>
+        <div class="border-x-2 border-b-2 border-twm">
+          <For each={props.layout.windows} keyed={(w) => w.id}>
+            {(w) => (
+              <button
+                type="button"
+                class="block w-full border-0 border-t border-twm-line bg-twm px-2 py-0.5 text-left font-bold text-white hover:bg-twm-hi"
+                classList={{
+                  "bg-twm-hi": props.focus === w().id,
+                  "text-twm-muted": !props.live(w().sandbox),
+                }}
+                onClick={() => {
+                  props.patchWin(w().id, { iconified: false }, true);
+                  props.raise(w().id);
+                  if (!props.live(w().sandbox) && !props.busy) {
+                    props.run(() => api.start(w().sandbox));
+                  }
+                }}
+                onContextMenu={(e) => props.openMenu(e, w().id)}
+              >
+                {w().title}
+              </button>
+            )}
+          </For>
+        </div>
+      </div>
+    </Show>
+  );
+}
+
+function CanvasWindows(props: {
+  layout: Layout;
+  sandboxes: Sandbox[];
+  focus: string | null;
+  live: (id: string) => boolean;
+  busy: boolean;
+  openMenu: (e: MouseEvent, windowId?: string) => void;
+  patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
+  raise: (id: string) => void;
+  run: (fn: () => Promise<void>) => Promise<boolean>;
+  save: () => void;
+}) {
+  return (
+    <For each={props.layout.windows} keyed={(w) => w.id}>
+      {(w) => (
+        <Show when={!w().iconified}>
+          <Frame
+            title={w().title}
+            x={w().x}
+            y={w().y}
+            w={w().w}
+            h={w().h}
+            z={w().z}
+            dataWin={w().id}
+            onMouseDown={() => {
+              props.raise(w().id);
+              if (!props.live(w().sandbox) && !props.busy) {
+                props.run(() => api.start(w().sandbox));
+              }
+            }}
+            onContextMenu={(e) => props.openMenu(e, w().id)}
+            onMove={(x, y) => props.patchWin(w().id, { x, y })}
+            onMoveEnd={props.save}
+            onResize={(nw, nh) => props.patchWin(w().id, { w: nw, h: nh })}
+            onIconify={() => props.patchWin(w().id, { iconified: true }, true)}
+          >
+            <Show
+              when={props.live(w().sandbox)}
+              fallback={
+                <div class="flex h-full items-center justify-center font-twm text-[13px] text-neutral-500">
+                  stopped — Start{" "}
+                  {props.sandboxes.find((s) => s.id === w().sandbox)?.name ?? "this Sandbox"}
+                </div>
+              }
+            >
+              <Term
+                windowId={w().id}
+                active={props.focus === w().id}
+                onActivate={() => props.raise(w().id)}
+              />
+            </Show>
+          </Frame>
+        </Show>
+      )}
+    </For>
+  );
+}
+
+function AppMenu(props: {
+  pos: MenuPos;
   sandbox?: Sandbox;
   window: WindowRec | null;
   iconMgr: boolean;
-  onNewWindow: () => void;
-  onNewSandbox: () => void;
-  onSandboxes: () => void;
-  onSaveTemplate: () => void;
-  onIconify: () => void;
-  onRaise: () => void;
-  onLower: () => void;
-  onCloseWindow: () => void;
-  onStart: () => void;
-  onStop: () => void;
-  onDestroy: () => void;
-  onReset: () => void;
-  onToggleIcons: () => void;
-  onLimits: () => void;
-  onHatch: () => void;
-  onPublish: () => void;
-  onCopy: (dir: "in" | "out") => void;
-  close: () => void;
+  layout: Layout;
+  focus: string | null;
+  setOverlay: (ov: Overlay) => void;
+  setMenu: (m: MenuPos | null) => void;
+  setStatus: (s: string) => void;
+  patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
+  raise: (id: string) => void;
+  run: (fn: () => Promise<void>) => Promise<boolean>;
+  save: (next: Layout) => void;
 }) {
-  const item =
-    "block w-full cursor-pointer border-0 bg-transparent px-3 py-0.5 text-left font-twm text-[13px] font-bold text-white hover:bg-twm-hi disabled:cursor-default disabled:text-twm-muted";
-  const head = "px-3 py-0.5 font-twm text-[11px] font-bold text-twm-muted";
+  const at = placeOverlay();
   const sb = () => props.sandbox;
-  const win = () => props.window;
-  const go = (fn: () => void) => {
-    fn();
-    props.close();
-  };
   return (
-    <div
-      class="absolute z-[100000] min-w-52 border border-neutral-800 bg-twm text-white shadow-[1px_1px_0_#000]"
-      style={{ left: `${props.x}px`, top: `${props.y}px` }}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
-      <div class="bg-twm-head px-2.5 py-0.5 font-bold text-twm">snowbox</div>
-      <button type="button" class={item} onClick={() => go(props.onNewSandbox)}>
-        New Sandbox
-      </button>
-      <button type="button" class={item} onClick={() => go(props.onSandboxes)}>
-        Sandboxes…
-      </button>
-      <div class="my-0.5 h-px bg-twm-line" />
-      <div class={head}>{sb() ? `Sandbox ${sb()!.name}` : "no Sandbox selected"}</div>
-      <button
-        type="button"
-        class={item}
-        disabled={!sb() || sb()!.state !== "running"}
-        onClick={() => go(props.onNewWindow)}
-      >
-        New Window{sb() ? ` on ${sb()!.name}` : ""}
-      </button>
-      <button
-        type="button"
-        class={item}
-        disabled={!sb()}
-        onClick={() => go(props.onSaveTemplate)}
-      >
-        Save {sb()?.name ?? "Sandbox"} as Template…
-      </button>
-      <button
-        type="button"
-        class={item}
-        disabled={!sb() || sb()!.state === "running"}
-        onClick={() => go(props.onStart)}
-      >
-        Start {sb()?.name ?? ""}
-      </button>
-      <button
-        type="button"
-        class={item}
-        disabled={!sb() || sb()!.state !== "running"}
-        onClick={() => go(props.onStop)}
-      >
-        Stop {sb()?.name ?? ""}
-      </button>
-      <button
-        type="button"
-        class={item}
-        disabled={!sb()}
-        onClick={() => go(props.onDestroy)}
-      >
-        Destroy {sb()?.name ?? ""}…
-      </button>
-      <button
-        type="button"
-        class={item}
-        disabled={!sb()}
-        onClick={() => go(props.onReset)}
-      >
-        Reset {sb()?.name ?? ""}…
-      </button>
-      <button type="button" class={item} disabled={!sb()} onClick={() => go(props.onLimits)}>
-        Limits of {sb()?.name ?? ""}…
-      </button>
-      <button type="button" class={item} disabled={!sb()} onClick={() => go(props.onHatch)}>
-        Hatch {sb()?.name ?? ""}…
-      </button>
-      <button
-        type="button"
-        class={item}
-        disabled={!sb() || sb()!.state !== "running"}
-        onClick={() => go(props.onPublish)}
-      >
-        Publish {sb()?.name ?? ""}…
-      </button>
-      <button
-        type="button"
-        class={item}
-        disabled={!sb() || sb()!.state === "running"}
-        onClick={() => go(() => props.onCopy("in"))}
-      >
-        Copy in to {sb()?.name ?? ""}…
-      </button>
-      <button
-        type="button"
-        class={item}
-        disabled={!sb() || sb()!.state === "running"}
-        onClick={() => go(() => props.onCopy("out"))}
-      >
-        Copy out from {sb()?.name ?? ""}…
-      </button>
-      <div class="my-0.5 h-px bg-twm-line" />
-      <div class={head}>{win() ? win()!.title : "no Window selected"}</div>
-      <button type="button" class={item} disabled={!win()} onClick={() => go(props.onIconify)}>
-        Iconify {win()?.title ?? ""}
-      </button>
-      <button type="button" class={item} disabled={!win()} onClick={() => go(props.onRaise)}>
-        Raise {win()?.title ?? ""}
-      </button>
-      <button type="button" class={item} disabled={!win()} onClick={() => go(props.onLower)}>
-        Lower {win()?.title ?? ""}
-      </button>
-      <button type="button" class={item} disabled={!win()} onClick={() => go(props.onCloseWindow)}>
-        Close {win()?.title ?? ""}
-      </button>
-      <div class="my-0.5 h-px bg-twm-line" />
-      <button type="button" class={item} onClick={() => go(props.onToggleIcons)}>
-        {props.iconMgr ? "Hide Icon Manager" : "Show Icon Manager"}
-      </button>
-    </div>
-  );
-}
-
-function OverlayDialog(props: {
-  overlay: NonNullable<Overlay>;
-  sandbox?: Sandbox;
-  sandboxes: Sandbox[];
-  move: (x: number, y: number) => void;
-  pickSandbox: (id: string) => void;
-  close: () => void;
-  run: (fn: () => Promise<unknown>, done?: string) => Promise<boolean>;
-}) {
-  const [name, setName] = createSignal("");
-  const [cpu, setCpu] = createSignal(String(props.sandbox?.limits.cpu ?? 2));
-  const [ram, setRam] = createSignal(
-    String((props.sandbox?.limits.ram ?? 2147483648) / (1024 * 1024)),
-  );
-  const [disk, setDisk] = createSignal(
-    String((props.sandbox?.limits.disk ?? 17179869184) / (1024 * 1024 * 1024)),
-  );
-  const [tpl, setTpl] = createSignal("empty");
-  const [templates, setTemplates] = createSignal<Template[]>([]);
-  const [agents, setAgents] = createSignal<AgentProgram[]>([]);
-  const [envDoc, setEnvDoc] = createSignal<Record<string, unknown>>({});
-  const [envCfg, setEnvCfg] = createSignal<Record<string, Record<string, unknown>>>({});
-  const [path, setPath] = createSignal("");
-  const [pubPort, setPubPort] = createSignal("3000");
-  const [hostPort, setHostPort] = createSignal("");
-  const [published, setPublished] = createSignal<Published[]>([]);
-  const [replace, setReplace] = createSignal(false);
-
-  onSettled(() => {
-    if (props.overlay.kind === "sandbox" || props.overlay.kind === "save-template") {
-      api.templates().then((r) => setTemplates(r.templates)).catch(() => {});
-    }
-    if (props.overlay.kind === "publish" && props.sandbox) {
-      api.published(props.sandbox.id).then((r) => setPublished(r.published)).catch(() => {});
-    }
-    if (props.overlay.kind !== "hatch" || !props.sandbox) return;
-    const id = props.sandbox.id;
-    Promise.all([api.agentOptions(), api.environment(id)])
-      .then(([opts, cfg]) => {
-        setAgents(opts.programs);
-        setEnvDoc(cfg);
-        const programs = (cfg.programs ?? {}) as Record<string, Record<string, unknown>>;
-        setEnvCfg(programs);
-      })
-      .catch(() => {});
-  });
-
-  const sbName = () => props.sandbox?.name ?? "";
-
-  const title = () => {
-    const ov = props.overlay;
-    if (ov.kind === "sandbox") return "New Sandbox";
-    if (ov.kind === "sandboxes") return "Sandboxes";
-    if (ov.kind === "limits") return `Limits — ${sbName()}`;
-    if (ov.kind === "hatch") return `Hatch — ${sbName()}`;
-    if (ov.kind === "save-template") return `Save ${sbName()} as Template`;
-    if (ov.kind === "publish") return `Publish — ${sbName()}`;
-    if (ov.kind === "destroy") return `Destroy ${sbName()}`;
-    if (ov.kind === "reset") return `Reset ${sbName()}`;
-    if (ov.kind === "copy") return ov.dir === "in" ? `Copy in — ${sbName()}` : `Copy out — ${sbName()}`;
-    return "snowbox";
-  };
-
-  const submit = async () => {
-    const ov = props.overlay;
-    if (ov.kind === "sandboxes") {
-      props.close();
-      return;
-    }
-    if (ov.kind === "save-template" && !name().trim()) return;
-
-    let ok = false;
-    if (ov.kind === "sandbox") {
-      ok = await props.run(async () => {
-        const sb = await api.create(name() || undefined, tpl() || undefined);
-        await api.start(sb.id);
-        await api.openWindow(sb.id);
-      });
-    } else if (ov.kind === "save-template") {
-      ok = await props.run(() => api.saveTemplate(name().trim(), ov.id));
-    } else if (ov.kind === "publish") {
-      const host = hostPort().trim();
-      await props.run(async () => {
-        const pub = await api.publish(
-          ov.id,
-          Number(pubPort()),
-          host ? Number(host) : undefined,
-        );
-        const list = await api.published(ov.id);
-        const rows = list.published.some((p) => p.url === pub.url)
-          ? list.published
-          : [...list.published, pub];
-        setPublished(rows);
-      });
-      return;
-    } else if (ov.kind === "limits") {
-      ok = await props.run(() =>
-        api.patchLimits(ov.id, {
-          cpu: Number(cpu()),
-          ram: Number(ram()) * 1024 * 1024,
-          disk: Number(disk()) * 1024 * 1024 * 1024,
-        }),
-      );
-    } else if (ov.kind === "hatch") {
-      const running = props.sandbox?.state === "running";
-      ok = await props.run(
-        () => api.saveEnvironment(ov.id, { ...envDoc(), programs: envCfg() }),
-        running ? "" : "applies on Start",
-      );
-    } else if (ov.kind === "copy") {
-      ok = await props.run(() =>
-        ov.dir === "in"
-          ? api.copyIn(ov.id, path(), replace())
-          : api.copyOut(ov.id, path(), replace()),
-      );
-    } else if (ov.kind === "destroy") {
-      ok = await props.run(() => api.destroy(ov.id));
-    } else if (ov.kind === "reset") {
-      ok = await props.run(() => api.reset(ov.id));
-    }
-    if (ok) props.close();
-  };
-
-  const field =
-    "mt-0.5 w-full box-border border border-neutral-600 px-1 py-0.5 font-mono text-[13px]";
-  const label = "mt-1.5 block font-bold";
-
-  return (
-    <Frame
-      title={title()}
-      x={props.overlay.x}
-      y={props.overlay.y}
-      z={overlayZ}
-      onMove={props.move}
-      onClose={props.close}
-    >
-      <form
-        class="min-w-80 bg-white px-3.5 py-3 font-twm text-black"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submit();
-        }}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <Show when={props.overlay.kind === "sandboxes"}>
-          <div class="max-h-64 overflow-y-auto border border-neutral-400">
-            <For
-              each={props.sandboxes}
-              keyed={(s) => s.id}
-              fallback={<div class="px-2 py-1 text-[12px]">no Sandboxes</div>}
-            >
-              {(s) => (
-                <button
-                  type="button"
-                  class="block w-full border-0 border-t border-neutral-300 bg-white px-2 py-1 text-left hover:bg-twm-hi hover:text-white"
-                  onClick={() => props.pickSandbox(s().id)}
-                >
-                  <span class="font-bold">{s().name}</span>
-                  <span class="ml-2 text-[12px]">{s().state}</span>
-                </button>
-              )}
-            </For>
-          </div>
-        </Show>
-        <Show when={props.overlay.kind === "destroy"}>
-          <p class="text-[13px]">
-            Destroy {sbName()}? Workspace is gone unless copy-out already happened.
-          </p>
-        </Show>
-        <Show when={props.overlay.kind === "reset"}>
-          <p class="text-[13px]">
-            Reset {sbName()}? Declared Agents and devenv stay. Undeclared tools
-            are gone. Workspace and Home remain.
-          </p>
-        </Show>
-        <Show when={props.overlay.kind === "sandbox"}>
-          <label class={label}>
-            name
-            <input class={field} value={name()} onInput={(e) => setName(e.currentTarget.value)} />
-          </label>
-          <label class={label}>
-            template
-            <select
-              class={`${field} bg-white text-black`}
-              value={tpl()}
-              onChange={(e) => setTpl(e.currentTarget.value)}
-            >
-              <option value="empty">empty</option>
-              <For
-                each={templates().filter((t) => t.name !== "empty")}
-                keyed={(t) => t.name}
-              >
-                {(t) => (
-                  <option value={t().name}>
-                    {t().name}
-                    {t().shipped ? "" : " (saved)"}
-                  </option>
-                )}
-              </For>
-            </select>
-          </label>
-        </Show>
-        <Show when={props.overlay.kind === "save-template"}>
-          <label class={label}>
-            name
-            <input class={field} value={name()} onInput={(e) => setName(e.currentTarget.value)} />
-          </label>
-        </Show>
-        <Show when={props.overlay.kind === "publish"}>
-          <For each={published()} keyed={(p) => p.port}>
-            {(p) => (
-              <div class="flex items-center justify-between gap-2 text-[12px]">
-                <a class="min-w-0 truncate text-twm" href={p().url}>
-                  {p().url}
-                </a>
-                <span>:{p().port}</span>
-                <button
-                  type="button"
-                  class="border border-twm-line bg-twm px-2 py-0.5 font-bold text-white"
-                  onClick={() => {
-                    const ov = props.overlay;
-                    if (ov.kind !== "publish") return;
-                    const port = p().port;
-                    void props.run(async () => {
-                      await api.unpublish(ov.id, port);
-                      setPublished((await api.published(ov.id)).published);
-                    });
-                  }}
-                >
-                  Unpublish
-                </button>
-              </div>
-            )}
-          </For>
-          <label class={label}>
-            sandbox port
-            <input class={field} value={pubPort()} onInput={(e) => setPubPort(e.currentTarget.value)} />
-          </label>
-          <label class={label}>
-            host port (optional)
-            <input class={field} value={hostPort()} onInput={(e) => setHostPort(e.currentTarget.value)} />
-          </label>
-        </Show>
-        <Show when={props.overlay.kind === "limits"}>
-          <label class={label}>
-            cpu
-            <input class={field} value={cpu()} onInput={(e) => setCpu(e.currentTarget.value)} />
-          </label>
-          <label class={label}>
-            ram (MiB)
-            <input class={field} value={ram()} onInput={(e) => setRam(e.currentTarget.value)} />
-          </label>
-          <label class={label}>
-            disk (GiB)
-            <input class={field} value={disk()} onInput={(e) => setDisk(e.currentTarget.value)} />
-          </label>
-        </Show>
-        <Show when={props.overlay.kind === "hatch"}>
-          <p class="text-[12px]">devenv is always in the Environment. Secrets stay out of the flake.</p>
-          <For
-            each={agents()}
-            keyed={(p) => p.name}
-            fallback={<div class="text-[12px]">no Agents</div>}
-          >
-            {(p) => {
-              const name = p().name;
-              const cur = () => envCfg()[name] ?? {};
-              const enabled = () => Boolean(cur().enable);
-              const settings = () =>
-                JSON.stringify(cur().settings ?? {}, null, 2);
-              return (
-                <div class="mt-2 border-t border-neutral-300 pt-2">
-                  <label class="flex items-center gap-2 font-bold">
-                    <input
-                      type="checkbox"
-                      checked={enabled()}
-                      onChange={(e) => {
-                        const on = e.currentTarget.checked;
-                        setEnvCfg({
-                          ...envCfg(),
-                          [name]: { ...cur(), enable: on },
-                        });
-                      }}
-                    />
-                    {name}
-                  </label>
-                  <div class="text-[11px] text-neutral-600">{p().description}</div>
-                  <label class={label}>
-                    settings
-                    <textarea
-                      class={`${field} h-24`}
-                      value={settings()}
-                      onChange={(e) => {
-                        try {
-                          const parsed = JSON.parse(e.currentTarget.value || "{}");
-                          setEnvCfg({
-                            ...envCfg(),
-                            [name]: { ...cur(), settings: parsed },
-                          });
-                        } catch {
-                          /* keep typing */
-                        }
-                      }}
-                    />
-                  </label>
-                </div>
-              );
-            }}
-          </For>
-        </Show>
-        <Show when={props.overlay.kind === "copy"}>
-          <label class={label}>
-            host path
-            <input class={field} value={path()} onInput={(e) => setPath(e.currentTarget.value)} />
-          </label>
-          <label class="mt-2 flex items-center gap-2 font-bold">
-            <input
-              type="checkbox"
-              checked={replace()}
-              onChange={(e) => setReplace(e.currentTarget.checked)}
-            />
-            replace
-          </label>
-        </Show>
-        <Show when={props.overlay.kind !== "sandboxes"}>
-          <div class="mt-3 flex justify-end gap-2">
-            <button
-              type="button"
-              class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
-              onClick={props.close}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
-            >
-              {props.overlay.kind === "destroy"
-                ? `Destroy ${sbName()}`
-                : props.overlay.kind === "reset"
-                  ? `Reset ${sbName()}`
-                  : "OK"}
-            </button>
-          </div>
-        </Show>
-      </form>
-    </Frame>
+    <RootMenu
+      x={props.pos.x}
+      y={props.pos.y}
+      sandbox={props.sandbox}
+      window={props.window}
+      iconMgr={props.iconMgr}
+      onNewSandbox={() => props.setOverlay({ kind: "sandbox", ...at })}
+      onSandboxes={() => props.setOverlay({ kind: "sandboxes", ...at })}
+      onSaveTemplate={() => {
+        const box = sb();
+        if (box) props.setOverlay({ kind: "save-template", id: box.id, ...at });
+      }}
+      onNewWindow={() => {
+        const box = sb();
+        if (!box || box.state !== "running") {
+          props.setStatus("Start that Sandbox first");
+          return;
+        }
+        props.run(async () => {
+          await api.openWindow(box.id);
+        });
+      }}
+      onIconify={() => {
+        const id = props.focus;
+        if (id) props.patchWin(id, { iconified: true }, true);
+      }}
+      onRaise={() => {
+        const id = props.focus;
+        if (id) props.raise(id);
+      }}
+      onLower={() => {
+        const id = props.focus;
+        if (id) props.patchWin(id, { z: 1 }, true);
+      }}
+      onCloseWindow={() => {
+        const id = props.focus;
+        if (id) props.run(() => api.closeWindow(id));
+      }}
+      onStart={() => {
+        const box = sb();
+        if (box) props.run(() => api.start(box.id).then(() => undefined));
+      }}
+      onStop={() => {
+        const box = sb();
+        if (box) props.run(() => api.stop(box.id).then(() => undefined));
+      }}
+      onDestroy={() => {
+        const box = sb();
+        if (box) props.setOverlay({ kind: "destroy", id: box.id, ...at });
+      }}
+      onReset={() => {
+        const box = sb();
+        if (box) props.setOverlay({ kind: "reset", id: box.id, ...at });
+      }}
+      onToggleIcons={() =>
+        props.save({
+          ...props.layout,
+          icon_manager: {
+            ...props.layout.icon_manager,
+            visible: !props.layout.icon_manager.visible,
+          },
+        })
+      }
+      onLimits={() => {
+        const box = sb();
+        if (box) props.setOverlay({ kind: "limits", id: box.id, ...at });
+      }}
+      onHatch={() => {
+        const box = sb();
+        if (box) props.setOverlay({ kind: "hatch", id: box.id, ...at });
+      }}
+      onPublish={() => {
+        const box = sb();
+        if (box) props.setOverlay({ kind: "publish", id: box.id, ...at });
+      }}
+      onCopy={(dir) => {
+        const box = sb();
+        if (box) props.setOverlay({ kind: "copy", id: box.id, dir, ...at });
+      }}
+      close={() => props.setMenu(null)}
+    />
   );
 }

@@ -1,0 +1,9 @@
+{
+  "ignorePatterns": [
+    "canvas/node_modules/**",
+    "canvas/dist/**",
+    "canvas/tools/**",
+    ".agents/**",
+    "apm_modules/**"
+  ]
+}

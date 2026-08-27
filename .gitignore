@@ -8,6 +8,7 @@ target
 devenv.local.nix
 canvas/node_modules
 canvas/dist
+apm_modules/
 
 # Devenv
 .devenv*
