@@ -3,9 +3,10 @@ import { Term } from "./term";
 import { Frame } from "./frame";
 import { RootMenu } from "./menu";
 import { OverlayDialog } from "./dialogs";
-import { placeOverlay, type MenuPos, type Overlay } from "./overlay";
+import { placeOverlay, type Overlay } from "./overlay";
 import { api, type Layout, type Sandbox, type WindowRec } from "./api";
 import { sandboxesWithoutWindows } from "./sandbox-icons";
+import { menuHit, type MenuHit } from "./menu-target";
 
 function focusTerm(id: string): void {
   const el = document.querySelector(`[data-win="${id}"] textarea.xterm-helper-textarea`);
@@ -43,8 +44,7 @@ export function App() {
     icon_manager: { x: 8, y: 8, visible: true },
   });
   const [focus, setFocus] = createSignal<string | null>(null);
-  const [picked, setPicked] = createSignal<string | null>(null);
-  const [menu, setMenu] = createSignal<MenuPos | null>(null);
+  const [menu, setMenu] = createSignal<MenuHit | null>(null);
   const [overlay, setOverlay] = createSignal<Overlay | null>(null);
   const [status, setStatus] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -93,20 +93,8 @@ export function App() {
     if (persist) save(next);
   };
 
-  const focusedWindow = () => layout().windows.find((w) => w.id === focus()) ?? null;
-
-  const targetSandbox = () => {
-    const win = focusedWindow();
-    if (win) return sandboxes().find((s) => s.id === win.sandbox);
-    const id = picked();
-    if (id) return sandboxes().find((s) => s.id === id);
-    return undefined;
-  };
-
   const raise = (id: string) => {
     setFocus(id);
-    const win = layout().windows.find((w) => w.id === id);
-    if (win) setPicked(win.sandbox);
     focusTerm(id);
     const z = Math.max(0, ...layout().windows.map((w) => w.z));
     const cur = layout().windows.find((w) => w.id === id);
@@ -131,11 +119,10 @@ export function App() {
     }
   };
 
-  const openMenu = (e: MouseEvent, windowId?: string) => {
+  const openMenu = (e: MouseEvent, spec: { windowId?: string; sandboxId?: string } = {}) => {
     e.preventDefault();
     e.stopPropagation();
-    if (windowId) raise(windowId);
-    setMenu({ x: e.clientX, y: e.clientY });
+    setMenu(menuHit(e.clientX, e.clientY, spec, layout().windows, sandboxes()));
   };
 
   const openOverlay = (next: Overlay) => setOverlay(next);
@@ -143,13 +130,7 @@ export function App() {
   return (
     <div
       class="relative h-full w-full bg-x11"
-      onContextMenu={(e) => {
-        if (e.target === e.currentTarget) {
-          setFocus(null);
-          setPicked(null);
-        }
-        openMenu(e);
-      }}
+      onContextMenu={(e) => openMenu(e)}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) setMenu(null);
       }}
@@ -161,10 +142,6 @@ export function App() {
         live={live}
         busy={busy()}
         openMenu={openMenu}
-        pickSandbox={(id) => {
-          setPicked(id);
-          setFocus(null);
-        }}
         patchWin={patchWin}
         raise={raise}
         run={run}
@@ -194,14 +171,13 @@ export function App() {
         save={() => save(layout())}
       />
       <Show when={menu()}>
-        {(pos) => (
+        {(hit) => (
           <AppMenu
-            pos={pos()}
-            sandbox={targetSandbox()}
-            window={focusedWindow()}
+            hit={hit()}
+            sandbox={hit().sandbox ?? undefined}
+            window={hit().window}
             iconMgr={layout().icon_manager.visible}
             layout={layout()}
-            focus={focus()}
             setOverlay={openOverlay}
             setMenu={setMenu}
             setStatus={setStatus}
@@ -219,8 +195,7 @@ export function App() {
             sandbox={sandboxes().find((s) => "id" in ov() && s.id === ov().id)}
             sandboxes={sandboxes()}
             move={(x, y) => setOverlay({ ...ov(), x, y })}
-            pickSandbox={(id) => {
-              setPicked(id);
+            pickSandbox={() => {
               setFocus(null);
               setOverlay(null);
             }}
@@ -254,8 +229,7 @@ function IconManager(props: {
   focus: string | null;
   live: (id: string) => boolean;
   busy: boolean;
-  openMenu: (e: MouseEvent, windowId?: string) => void;
-  pickSandbox: (id: string) => void;
+  openMenu: (e: MouseEvent, spec?: { windowId?: string; sandboxId?: string }) => void;
   patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
   raise: (id: string) => void;
   run: (fn: () => Promise<void>) => Promise<boolean>;
@@ -296,7 +270,7 @@ function IconManager(props: {
                     props.run(() => api.start(w().sandbox));
                   }
                 }}
-                onContextMenu={(e) => props.openMenu(e, w().id)}
+                onContextMenu={(e) => props.openMenu(e, { windowId: w().id })}
               >
                 {w().title}
               </button>
@@ -311,17 +285,13 @@ function IconManager(props: {
                 type="button"
                 class="block w-full border-0 border-t border-twm-line bg-twm px-2 py-0.5 text-left font-bold text-twm-muted hover:bg-twm-hi hover:text-white"
                 onClick={() => {
-                  props.pickSandbox(s().id);
                   if (props.busy) return;
                   props.run(async () => {
                     if (s().state !== "running") await api.start(s().id);
                     await api.openWindow(s().id);
                   });
                 }}
-                onContextMenu={(e) => {
-                  props.pickSandbox(s().id);
-                  props.openMenu(e);
-                }}
+                onContextMenu={(e) => props.openMenu(e, { sandboxId: s().id })}
               >
                 {s().name} ({s().state})
               </button>
@@ -339,7 +309,7 @@ function CanvasWindows(props: {
   focus: string | null;
   live: (id: string) => boolean;
   busy: boolean;
-  openMenu: (e: MouseEvent, windowId?: string) => void;
+  openMenu: (e: MouseEvent, spec?: { windowId?: string; sandboxId?: string }) => void;
   patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
   raise: (id: string) => void;
   run: (fn: () => Promise<void>) => Promise<boolean>;
@@ -363,7 +333,7 @@ function CanvasWindows(props: {
                 props.run(() => api.start(w().sandbox));
               }
             }}
-            onContextMenu={(e) => props.openMenu(e, w().id)}
+            onContextMenu={(e) => props.openMenu(e, { windowId: w().id })}
             onMove={(x, y) => props.patchWin(w().id, { x, y })}
             onMoveEnd={props.save}
             onResize={(nw, nh) => props.patchWin(w().id, { w: nw, h: nh })}
@@ -392,14 +362,13 @@ function CanvasWindows(props: {
 }
 
 function AppMenu(props: {
-  pos: MenuPos;
+  hit: MenuHit;
   sandbox?: Sandbox;
   window: WindowRec | null;
   iconMgr: boolean;
   layout: Layout;
-  focus: string | null;
   setOverlay: (ov: Overlay) => void;
-  setMenu: (m: MenuPos | null) => void;
+  setMenu: (m: MenuHit | null) => void;
   setStatus: (s: string) => void;
   patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
   raise: (id: string) => void;
@@ -408,10 +377,11 @@ function AppMenu(props: {
 }) {
   const at = placeOverlay();
   const sb = () => props.sandbox;
+  const winId = () => props.window?.id;
   return (
     <RootMenu
-      x={props.pos.x}
-      y={props.pos.y}
+      x={props.hit.x}
+      y={props.hit.y}
       sandbox={props.sandbox}
       window={props.window}
       iconMgr={props.iconMgr}
@@ -432,19 +402,19 @@ function AppMenu(props: {
         });
       }}
       onIconify={() => {
-        const id = props.focus;
+        const id = winId();
         if (id) props.patchWin(id, { iconified: true }, true);
       }}
       onRaise={() => {
-        const id = props.focus;
+        const id = winId();
         if (id) props.raise(id);
       }}
       onLower={() => {
-        const id = props.focus;
+        const id = winId();
         if (id) props.patchWin(id, { z: 1 }, true);
       }}
       onCloseWindow={() => {
-        const id = props.focus;
+        const id = winId();
         if (id) props.run(() => api.closeWindow(id));
       }}
       onStart={() => {
