@@ -493,23 +493,11 @@ fn boot_claimed(
     let sandbox = store.get(id)?;
     let dir = store.dir(id);
     let hatching = !dir.join("disk").join("root.raw").is_file() && !dir.join(SAVE_NAME).is_file();
-    if hatching {
-        log.line(format!("sandbox {id}: waiting for ready snapshot"));
-        wait_ready_snapshot(vmm, cache, store.root(), log);
-        if !vmm.ready_snapshot_exists(store.root()) {
-            log.line("ready snapshot: missing; cold boot");
-        }
+    if hatching && !vmm.ready_snapshot_exists(store.root()) {
+        log.line("ready disk: none; cold boot");
     }
     log.line(format!("sandbox {id}: starting hypervisor"));
     let started = vmm.start(id, &dir, sandbox.limits);
-    if hatching {
-        kick_replenish(
-            vmm.clone(),
-            cache.clone(),
-            store.root().to_path_buf(),
-            log.clone(),
-        );
-    }
     let kind = started.map_err(ActionError::Failed)?;
     log.line(format!(
         "sandbox {id}: hypervisor {}ms ({kind:?})",
@@ -538,6 +526,13 @@ fn boot_claimed(
         "sandbox {id}: agent {}ms",
         t1.elapsed().as_millis()
     ));
+    if hatching {
+        if let Err(e) = vmm.capture_ready(id, &dir) {
+            log.line(format!("ready disk: capture failed ({e})"));
+        } else if vmm.ready_snapshot_exists(store.root()) {
+            log.line("ready disk: ready");
+        }
+    }
     if dir.join(crate::vmm::HATCHED).is_file() {
         let _ = crate::agent::reset_dir(vmm, id, "/workspace");
         let _ = crate::agent::reset_dir(vmm, id, "/home/snow");
@@ -631,71 +626,9 @@ fn halt(
     store.stop(id)
 }
 
-fn kick_replenish(
-    vmm: Arc<Hypervisor>,
-    cache: Arc<Cache>,
-    sandboxes: PathBuf,
-    log: crate::progress::Progress,
-) {
-    std::thread::spawn(move || wait_ready_snapshot(&vmm, &cache, &sandboxes, &log));
-}
-
-fn wait_ready_snapshot(
-    vmm: &Hypervisor,
-    cache: &Cache,
-    sandboxes: &std::path::Path,
-    log: &crate::progress::Progress,
-) {
-    crate::ready::ensure(
-        || vmm.ready_snapshot_exists(sandboxes),
-        || warm_once(vmm, cache, sandboxes, log),
-    );
-}
-
-fn warm_once(
-    vmm: &Hypervisor,
-    cache: &Cache,
-    sandboxes: &std::path::Path,
-    log: &crate::progress::Progress,
-) -> Result<(), String> {
-    log.line("ready snapshot: warming");
-    let dir = sandboxes.join(".warm");
-    let _ = std::fs::remove_dir_all(&dir);
-    let id = Uuid::new_v4();
-    let run = (|| {
-        std::fs::create_dir_all(&dir).map_err(|e| format!("warm mkdir: {e}"))?;
-        crate::environment::write_default(&dir).map_err(|e| e.to_string())?;
-        vmm.start_cold(id, &dir, Limits::default())?;
-        crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(180))?;
-        apply_env_at(&dir, cache, vmm, id, log).map_err(|e| e.to_string())?;
-        vmm.save_and_stop(id, &dir.join(SAVE_NAME))?;
-        Ok::<(), String>(())
-    })();
-    if run.is_err() {
-        let _ = vmm.stop(id);
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-    if run.is_ok() {
-        log.line("ready snapshot: ready");
-    }
-    run
-}
-
-/// Warm a ready snapshot in the background. Does not auto-start Sandboxes
-/// listed in running.json; Start is a user action that restores that
-/// Sandbox's saved machine state.
-pub fn resume_and_warm(state: AppState) {
-    tokio::spawn(async move {
-        let Some(vmm) = state.vmm.clone() else {
-            return;
-        };
-        let cache = state.cache.clone();
-        let root = state.store.root().to_path_buf();
-        let log = state.progress.clone();
-        let _ = tokio::task::spawn_blocking(move || wait_ready_snapshot(&vmm, &cache, &root, &log))
-            .await;
-    });
-}
+/// Daemon start does not boot a throwaway guest. The first New Sandbox
+/// that reaches the agent is cloned as the ready disk.
+pub fn resume_and_warm(_state: AppState) {}
 
 pub async fn on_quit(state: AppState) {
     let ctrl_c = tokio::signal::ctrl_c();

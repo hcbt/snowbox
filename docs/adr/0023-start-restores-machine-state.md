@@ -6,7 +6,7 @@ Stop writes Virtualization.framework machine state next to the Sandbox disk and 
 
 The platform `machineIdentifier` is persisted with the Sandbox (`machine.ident`). Restore fails with `invalid argument` if it does not match the save. Two running guests must not share an identifier.
 
-Ready is warmed in the background from `.warm` only (disk + ident), keyed by the guest runtime, not by Environment. Stop writes machine state for that Sandbox; it does not bake `.ready`. A New Sandbox consumes the snapshot and restores — about a second, then Environment is applied if the stamp differs. The Daemon boots a replacement in the background. Two running guests never share an identifier.
+Ready is a clone of the first Sandbox disk that reached the agent for this guest runtime, taken before Environment apply. It is disk only: no `machine.ident`, no `.vzvmsave`. Linux guests use `VZGenericMachineIdentifier`; `init()` mints a new unique identifier per clone (Lima does the same on `limactl clone`). Restore of `.vzvmsave` still needs the matching identifier, so New Sandbox cold-boots the cloned disk instead of restoring. Stop writes machine state for that Sandbox; it does not bake `.ready`. Two running guests never share an identifier. The Daemon does not boot a throwaway `.warm` guest.
 
 If Apple refuses the device set (`validateSaveRestoreSupport`), or restore fails, or the agent does not answer, Start boots. `validateSaveRestoreSupport` failing does not block boot; Stop then skips writing machine state.
 

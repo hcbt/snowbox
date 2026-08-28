@@ -16,7 +16,7 @@ The token is a file in the Host config directory (`snowbox/token` under `dirs::c
 
 ## Sandboxes
 
-Each Sandbox has a disk the Daemon owns on the Host (under the data directory, `snowbox/sandboxes/{id}`). That disk holds Workspace (`/workspace`), the Linux home directory, a system tree, and the Environment flake (a Host document, never `/workspace`). Start restores a saved machine state when one exists for that disk. A New Sandbox restores a pre-booted snapshot of the guest runtime (the Daemon warms that snapshot in the background from `.warm` if it is missing). Stop writes machine state for that Sandbox; it does not refresh `.ready`. The guest root is a clone of the runtime disk; Workspace and Linux home are synced over vsock, not a Host mount. Quit the Daemon: running guests are saved then stopped; disks, machine state, and Layout stay. Destroy is the only verb that deletes the Workspace.
+Each Sandbox has a disk the Daemon owns on the Host (under the data directory, `snowbox/sandboxes/{id}`). That disk holds Workspace (`/workspace`), the Linux home directory, a system tree, and the Environment flake (a Host document, never `/workspace`). Start restores a saved machine state when one exists for that disk. A New Sandbox clones a disk the first Start already booted (keyed by guest runtime). Stop writes machine state for that Sandbox; it does not refresh `.ready`. The guest root is a clone of the runtime disk; Workspace and Linux home are synced over vsock, not a Host mount. Quit the Daemon: running guests are saved then stopped; disks, machine state, and Layout stay. Destroy is the only verb that deletes the Workspace.
 
 Many Sandboxes may run at once. They share Host CPU, RAM, and disk capacity, not a filesystem and not a network: each guest has its own disk and its own NAT. The allowed exception is the Cache (Host-side; the Daemon writes, guests copy).
 
@@ -31,7 +31,7 @@ Reset puts the Sandbox back to Create: restores the Environment as it was at Cre
 | Method | Path | Meaning |
 | --- | --- | --- |
 | `GET` | `/health` | `{"ok":true}` |
-| `GET` | `/progress` | Host work log (`{"lines":["…"]}`). New Sandbox, Start, ready-snapshot warm, Environment realize. Last 2000 lines. |
+| `GET` | `/progress` | Host work log (`{"lines":["…"]}`). New Sandbox, Start, ready-disk capture, Environment realize. Last 2000 lines. |
 | `GET` | `/sandboxes` | List |
 | `POST` | `/sandboxes` | Create. Body `{"name": "...", "limits": {...}, "template": "empty", "environment": {...}}` — all optional. `template` is a Template name. `environment` is optional `config.json` (Customize at Create). `201` |
 | `GET` | `/templates` | Shipped and saved Templates. |

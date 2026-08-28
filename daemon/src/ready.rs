@@ -1,5 +1,5 @@
-//! One pre-booted snapshot. New Sandbox waits for it instead of
-//! cold-booting. After it is consumed, a replacement is warmed.
+//! One booted-disk clone. The first hatch captures it; later hatches
+//! clone that disk and cold-boot with a new identifier.
 
 use std::sync::{Condvar, Mutex};
 

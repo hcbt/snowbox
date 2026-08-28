@@ -96,6 +96,10 @@ impl crate::vmm::Engine for VzEngine {
         pause_vm(id)
     }
 
+    fn resume(&self, id: Uuid) -> Result<(), String> {
+        resume_vm(id)
+    }
+
     fn save(&self, id: Uuid, save: &Path) -> Result<(), String> {
         save_vm(id, save)
     }
@@ -599,6 +603,30 @@ fn pause_vm(id: Uuid) -> Result<(), String> {
         unsafe { vm.0.pauseWithCompletionHandler(&handler) };
     });
     wait_result(rx, STOP_TIMEOUT, "pause")
+}
+
+#[cfg(target_os = "macos")]
+fn resume_vm(id: Uuid) -> Result<(), String> {
+    use std::sync::mpsc;
+
+    let queue = live_queue(id)?;
+    let (tx, rx) = mpsc::channel::<Result<(), String>>();
+    queue.exec_async(move || {
+        let vm = match live_send_vm(id) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = tx.send(Err(e));
+                return;
+            }
+        };
+        if !unsafe { vm.0.canResume() } {
+            let _ = tx.send(Err("sandbox cannot resume".into()));
+            return;
+        }
+        let handler = error_handler(tx);
+        unsafe { vm.0.resumeWithCompletionHandler(&handler) };
+    });
+    wait_result(rx, STOP_TIMEOUT, "resume")
 }
 
 #[cfg(target_os = "macos")]

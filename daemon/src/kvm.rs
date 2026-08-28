@@ -49,6 +49,10 @@ impl Engine for KvmEngine {
         qmp_cmd(id, "stop", None).map(|_| ())
     }
 
+    fn resume(&self, id: Uuid) -> Result<(), String> {
+        qmp_cmd(id, "cont", None).map(|_| ())
+    }
+
     fn save(&self, id: Uuid, save: &Path) -> Result<(), String> {
         if let Some(parent) = save.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("mkdir save: {e}"))?;
