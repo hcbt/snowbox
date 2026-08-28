@@ -252,9 +252,9 @@ async fn destroy(
         let store = state.store.clone();
         let resume = state.resume.clone();
         let result = tokio::task::spawn_blocking(move || {
-            if store.get(id).map(|s| s.state).ok() == Some(SandboxState::Running) {
-                let _ = halt(store.clone(), vmm, resume.clone(), id, true);
-            }
+            // Stop without save: Destroy deletes the disk, and a save
+            // can keep the image open so remove_dir_all fails.
+            let _ = vmm.stop(id);
             resume.unmark(id);
             store.destroy(id)
         })
@@ -265,8 +265,6 @@ async fn destroy(
         let _ = state.layout.close_sandbox_windows(id);
         return Ok(StatusCode::NO_CONTENT);
     }
-    state.publish.drop_sandbox(id);
-    state.sessions.drop_sandbox(id);
     state.store.destroy(id).map_err(map_err)?;
     let _ = state.layout.close_sandbox_windows(id);
     Ok(StatusCode::NO_CONTENT)
@@ -883,6 +881,8 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(json["error"], "not_found");
+        let reopened = crate::sandbox::Store::open(_dir.path()).unwrap();
+        assert!(reopened.list().is_empty());
     }
 
     #[tokio::test]

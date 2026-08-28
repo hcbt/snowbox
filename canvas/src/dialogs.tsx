@@ -467,9 +467,7 @@ async function submitOverlay(
         : api.copyOut(ov.id, form.path, form.replace).then(() => undefined),
     );
   } else if (ov.kind === "destroy") {
-    props.close();
-    await props.run(() => api.destroy(ov.id));
-    return;
+    ok = await props.run(() => api.destroy(ov.id));
   } else if (ov.kind === "reset") {
     ok = await props.run(() => api.reset(ov.id).then(() => undefined), "", true);
   }

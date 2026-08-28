@@ -259,14 +259,13 @@ impl Store {
     }
 
     pub fn destroy(&self, id: Uuid) -> Result<(), ActionError> {
-        {
-            let mut map = self.inner.lock().expect("sandbox store");
-            map.remove(&id).ok_or(ActionError::NotFound)?;
-        }
+        let _ = self.get(id)?;
         let dir = self.dir(id);
         if dir.exists() {
-            fs::remove_dir_all(&dir).map_err(|_| ActionError::Internal)?;
+            fs::remove_dir_all(&dir)
+                .map_err(|e| ActionError::Failed(format!("destroy disk: {e}")))?;
         }
+        self.inner.lock().expect("sandbox store").remove(&id);
         Ok(())
     }
 
@@ -916,5 +915,33 @@ mod tests {
         assert!(disk.join("workspace/f").exists());
         store.destroy(sb.id).unwrap();
         assert!(!disk.exists());
+        let reopened = Store::open(tmp.path()).unwrap();
+        assert!(reopened.list().is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn destroy_keeps_the_sandbox_if_the_disk_cannot_be_removed() {
+        let (tmp, store) = store();
+        let sb = store.create(None).unwrap();
+        let locked = store.dir(sb.id).join("locked.bin");
+        fs::write(&locked, b"x").unwrap();
+        let flag = std::process::Command::new("chflags")
+            .args(["uchg", locked.to_str().unwrap()])
+            .status()
+            .expect("chflags");
+        assert!(flag.success());
+        let err = store.destroy(sb.id);
+        let _ = std::process::Command::new("chflags")
+            .args(["nouchg", locked.to_str().unwrap()])
+            .status();
+        assert!(err.is_err(), "destroy must fail while the disk remains");
+        assert!(
+            store.get(sb.id).is_ok(),
+            "forgetting before the disk is gone makes Destroy look successful until restart"
+        );
+        store.destroy(sb.id).unwrap();
+        let reopened = Store::open(tmp.path()).unwrap();
+        assert!(reopened.list().is_empty());
     }
 }
