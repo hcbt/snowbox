@@ -2,7 +2,8 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 use axum::{
-    Json, body::Body,
+    Json,
+    body::Body,
     http::{StatusCode, Uri, header::CONTENT_TYPE},
     middleware,
     response::{Html, IntoResponse, Response},
