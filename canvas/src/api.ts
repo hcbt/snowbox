@@ -28,12 +28,7 @@ export type AgentProgram = {
   options: AgentOption[];
 };
 
-export type EnvProgram = {
-  enable?: boolean;
-  settings?: JsonObject;
-  extraPackages?: string[];
-  configDir?: string;
-};
+export type EnvProgram = JsonObject;
 
 export type EnvironmentDoc = {
   programs?: { [name: string]: EnvProgram };

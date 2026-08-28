@@ -369,7 +369,7 @@ async fn put_template(
 }
 
 async fn agent_options() -> Json<serde_json::Value> {
-    Json(serde_json::from_str(crate::environment::SCHEMA).expect("schema json"))
+    Json(crate::environment::agent_schema())
 }
 
 async fn get_environment(

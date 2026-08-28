@@ -682,6 +682,132 @@ function LimitsFields(props: {
   );
 }
 
+function getField(obj: JsonObject, path: string): Json | undefined {
+  const parts = path.split(".");
+  let cur: Json | undefined = obj;
+  for (const part of parts) {
+    if (!isJsonObject(cur ?? null)) return undefined;
+    cur = cur[part];
+  }
+  return cur;
+}
+
+function setField(obj: JsonObject, path: string, value: Json): JsonObject {
+  const parts = path.split(".");
+  const next: JsonObject = { ...obj };
+  const head = parts[0];
+  if (parts.length === 1) {
+    next[head] = value;
+    return next;
+  }
+  const child = isJsonObject(next[head] ?? null) ? next[head] : {};
+  next[head] = setField(child, parts.slice(1).join("."), value);
+  return next;
+}
+
+function jsonText(value: Json | undefined): string {
+  return JSON.stringify(value ?? {}, null, 2);
+}
+
+function packageAllow(opt: AgentOption): string[] {
+  if (!Array.isArray(opt.default)) return [];
+  const out: string[] = [];
+  for (const item of opt.default) {
+    if (isJsonObject(item)) continue;
+    if (item === null || Array.isArray(item)) continue;
+    out.push(String(item));
+  }
+  return out;
+}
+
+function selectedPackages(value: Json | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    if (isJsonObject(item) || item === null || Array.isArray(item)) continue;
+    out.push(String(item));
+  }
+  return out;
+}
+
+function OptionField(props: {
+  opt: AgentOption;
+  cur: JsonObject;
+  onSet: (next: JsonObject) => void;
+}) {
+  const opt = () => props.opt;
+  const value = () => getField(props.cur, opt().name);
+  if (opt().type === "boolean") {
+    return (
+      <label class="mt-1.5 flex items-center gap-2 font-bold">
+        <input
+          type="checkbox"
+          checked={Boolean(value())}
+          onChange={(e) => props.onSet(setField(props.cur, opt().name, e.currentTarget.checked))}
+        />
+        {opt().name}
+      </label>
+    );
+  }
+  if (opt().type === "packages") {
+    const allow = packageAllow(opt());
+    const selected = () => selectedPackages(value());
+    return (
+      <>
+        <div class={`${label} mb-1`}>{opt().name}</div>
+        <For each={allow}>
+          {(pkg) => (
+            <label class="flex items-center gap-2 text-[12px]">
+              <input
+                type="checkbox"
+                checked={selected().includes(pkg())}
+                onChange={(e) => {
+                  const on = e.currentTarget.checked;
+                  const next = new Set(selected());
+                  if (on) next.add(pkg());
+                  else next.delete(pkg());
+                  props.onSet(setField(props.cur, opt().name, [...next]));
+                }}
+              />
+              {pkg()}
+            </label>
+          )}
+        </For>
+      </>
+    );
+  }
+  if (opt().type === "string" || opt().type === "number") {
+    return (
+      <label class={label}>
+        {opt().name}
+        <input
+          class={field}
+          value={value() === undefined || value() === null ? "" : String(value())}
+          onInput={(e) => {
+            const raw = e.currentTarget.value;
+            const next = opt().type === "number" ? (raw === "" ? 0 : Number(raw)) : raw;
+            props.onSet(setField(props.cur, opt().name, next));
+          }}
+        />
+      </label>
+    );
+  }
+  return (
+    <label class={label}>
+      {opt().name}
+      <textarea
+        class={`${field} h-24`}
+        value={jsonText(value())}
+        onChange={(e) => {
+          const parsed = parseSettings(e.currentTarget.value);
+          if (!parsed) return;
+          props.onSet(setField(props.cur, opt().name, parsed));
+        }}
+      />
+    </label>
+  );
+}
+
 function EnvironmentFields(props: {
   agents: AgentProgram[];
   envCfg: { [name: string]: EnvProgram };
@@ -704,9 +830,6 @@ function EnvironmentFields(props: {
           const name = p().name;
           const cur = () => props.envCfg[name] ?? {};
           const enabled = () => Boolean(cur().enable);
-          const settings = () => JSON.stringify(cur().settings ?? {}, null, 2);
-          const extras = p().options.find((o) => o.name === "extraPackages");
-          const allow = extras && Array.isArray(extras.default) ? extras.default : [];
           return (
             <div class="mt-2 border-t border-neutral-300 pt-2">
               <label class="flex items-center gap-2 font-bold">
@@ -724,62 +847,15 @@ function EnvironmentFields(props: {
                 {name}
               </label>
               <div class="text-[11px] text-neutral-600">{p().description}</div>
-              <label class={label}>
-                settings
-                <textarea
-                  class={`${field} h-24`}
-                  value={settings()}
-                  onChange={(e) => {
-                    const parsed = parseSettings(e.currentTarget.value);
-                    if (!parsed) return;
-                    props.setEnvCfg({
-                      ...props.envCfg,
-                      [name]: { ...cur(), settings: parsed },
-                    });
-                  }}
-                />
-              </label>
-              <Show when={p().options.some((o) => o.name === "configDir")}>
-                <label class={label}>
-                  config dir
-                  <input
-                    class={field}
-                    value={cur().configDir ?? ""}
-                    placeholder="/home/snow/.claude"
-                    onInput={(e) => {
-                      const v = e.currentTarget.value;
-                      props.setEnvCfg({
-                        ...props.envCfg,
-                        [name]: { ...cur(), configDir: v || undefined },
-                      });
-                    }}
+              <For each={p().options.filter((o) => o.name !== "enable")} keyed={(o) => o.name}>
+                {(o) => (
+                  <OptionField
+                    opt={o()}
+                    cur={cur()}
+                    onSet={(next) => props.setEnvCfg({ ...props.envCfg, [name]: next })}
                   />
-                </label>
-              </Show>
-              <Show when={allow.length > 0}>
-                <div class={`${label} mb-1`}>extra packages</div>
-                <For each={allow.filter((x): x is string => typeof x === "string")}>
-                  {(pkg) => (
-                    <label class="flex items-center gap-2 text-[12px]">
-                      <input
-                        type="checkbox"
-                        checked={(cur().extraPackages ?? []).includes(pkg())}
-                        onChange={(e) => {
-                          const on = e.currentTarget.checked;
-                          const next = new Set(cur().extraPackages ?? []);
-                          if (on) next.add(pkg());
-                          else next.delete(pkg());
-                          props.setEnvCfg({
-                            ...props.envCfg,
-                            [name]: { ...cur(), extraPackages: [...next] },
-                          });
-                        }}
-                      />
-                      {pkg()}
-                    </label>
-                  )}
-                </For>
-              </Show>
+                )}
+              </For>
             </div>
           );
         }}

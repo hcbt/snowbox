@@ -20,5 +20,11 @@
     in
     {
       packages.${system}.default = hm.activationPackage;
+      agentOptions = builtins.toJSON (
+        import ./dump-options.nix {
+          inherit (pkgs) lib;
+          options = hm.options.programs;
+        }
+      );
     };
 }
