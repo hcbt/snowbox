@@ -35,6 +35,7 @@ pub struct AppState {
     pub templates: Arc<Library>,
     pub publish: Publisher,
     pub sessions: crate::pty::Sessions,
+    pub progress: crate::progress::Progress,
     pub vmm: Option<Arc<Hypervisor>>,
     pub resume: Arc<Resume>,
     pub agent_options: Arc<Result<serde_json::Value, String>>,
@@ -111,6 +112,7 @@ pub fn router(state: AppState) -> Router {
             "/sandboxes/{id}/environment",
             get(get_environment).put(put_environment),
         )
+        .route("/progress", get(progress))
         .route("/layout", get(get_layout).put(put_layout))
         .route("/sandboxes/{id}/windows", post(open_window))
         .route("/windows/{id}", axum::routing::delete(close_window))
@@ -121,6 +123,10 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), require_token));
 
     Router::new().nest("/api/v1", v1).with_state(state)
+}
+
+async fn progress(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "lines": state.progress.snapshot() }))
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -150,6 +156,9 @@ async fn create(
         crate::environment::set_document(&dir, &environment).map_err(map_err)?;
         crate::environment::snapshot_create(&dir).map_err(map_err)?;
     }
+    state
+        .progress
+        .line(format!("sandbox {}: created", sandbox.id));
     Ok((
         StatusCode::CREATED,
         Json(serde_json::to_value(sandbox).expect("sandbox json")),
@@ -182,7 +191,8 @@ async fn start(
     let store = state.store.clone();
     let cache = state.cache.clone();
     let resume = state.resume.clone();
-    let result = tokio::task::spawn_blocking(move || boot(store, cache, vmm, resume, id))
+    let log = state.progress.clone();
+    let result = tokio::task::spawn_blocking(move || boot(store, cache, vmm, resume, id, log))
         .await
         .map_err(|_| ActionError::Internal)
         .and_then(|r| r);
@@ -403,8 +413,9 @@ async fn put_environment(
             let store = state.store.clone();
             let cache = state.cache.clone();
             let home = dir.join("home");
+            let log = state.progress.clone();
             tokio::task::spawn_blocking(move || {
-                apply_env(&store, &cache, &vmm, id)?;
+                apply_env(&store, &cache, &vmm, id, &log)?;
                 crate::agent::tar_in(&vmm, id, "/home/snow", &home).map_err(ActionError::Failed)
             })
             .await
@@ -455,12 +466,13 @@ fn boot(
     vmm: Arc<Hypervisor>,
     resume: Arc<Resume>,
     id: Uuid,
+    log: crate::progress::Progress,
 ) -> Result<crate::sandbox::Sandbox, ActionError> {
     store.begin_boot(id)?;
-    match boot_claimed(&store, &cache, &vmm, id) {
+    match boot_claimed(&store, &cache, &vmm, id, &log) {
         Ok(sandbox) => {
             resume.mark(id);
-            kick_replenish(vmm, cache, store.root().to_path_buf());
+            kick_replenish(vmm, cache, store.root().to_path_buf(), log);
             Ok(sandbox)
         }
         Err(err) => {
@@ -476,29 +488,33 @@ fn boot_claimed(
     cache: &Cache,
     vmm: &Hypervisor,
     id: Uuid,
+    log: &crate::progress::Progress,
 ) -> Result<crate::sandbox::Sandbox, ActionError> {
     let t0 = std::time::Instant::now();
     let sandbox = store.get(id)?;
     let dir = store.dir(id);
     let hatching = !dir.join("disk").join("root.raw").is_file() && !dir.join(SAVE_NAME).is_file();
     if hatching {
-        wait_ready_snapshot(vmm, cache, store.root());
+        log.line(format!("sandbox {id}: waiting for ready snapshot"));
+        wait_ready_snapshot(vmm, cache, store.root(), log);
     }
+    log.line(format!("sandbox {id}: starting hypervisor"));
     let kind = vmm
         .start(id, &dir, sandbox.limits)
         .map_err(ActionError::Failed)?;
-    eprintln!(
+    log.line(format!(
         "sandbox {id}: hypervisor {}ms ({kind:?})",
         t0.elapsed().as_millis()
-    );
+    ));
     let t1 = std::time::Instant::now();
     let ready_for = match kind {
         StartKind::Restored => std::time::Duration::from_secs(8),
         StartKind::Cold => std::time::Duration::from_secs(180),
     };
+    log.line(format!("sandbox {id}: waiting for guest"));
     if let Err(e) = crate::agent::wait_ready(vmm, id, ready_for) {
         if kind == StartKind::Restored {
-            eprintln!("sandbox {id}: restored agent dead ({e}); booting");
+            log.line(format!("sandbox {id}: restored agent dead ({e}); booting"));
             let _ = vmm.stop(id);
             let _ = std::fs::remove_file(dir.join(SAVE_NAME));
             vmm.start_cold(id, &dir, sandbox.limits)
@@ -509,7 +525,10 @@ fn boot_claimed(
             return Err(ActionError::Failed(e));
         }
     }
-    eprintln!("sandbox {id}: agent {}ms", t1.elapsed().as_millis());
+    log.line(format!(
+        "sandbox {id}: agent {}ms",
+        t1.elapsed().as_millis()
+    ));
     if dir.join(crate::vmm::HATCHED).is_file() {
         let _ = crate::agent::reset_dir(vmm, id, "/workspace");
         let _ = crate::agent::reset_dir(vmm, id, "/home/snow");
@@ -519,14 +538,26 @@ fn boot_claimed(
         .map_err(ActionError::Failed)?;
     let _ = crate::agent::tar_in(vmm, id, "/home/snow", &dir.join("home"));
     let t2 = std::time::Instant::now();
-    apply_env_at(&dir, cache, vmm, id)?;
-    eprintln!("sandbox {id}: environment {}ms", t2.elapsed().as_millis());
-    eprintln!("sandbox {id}: start {}ms", t0.elapsed().as_millis());
+    apply_env_at(&dir, cache, vmm, id, log)?;
+    log.line(format!(
+        "sandbox {id}: environment {}ms",
+        t2.elapsed().as_millis()
+    ));
+    log.line(format!(
+        "sandbox {id}: start {}ms",
+        t0.elapsed().as_millis()
+    ));
     store.start(id)
 }
 
-fn apply_env(store: &Store, cache: &Cache, vmm: &Hypervisor, id: Uuid) -> Result<(), ActionError> {
-    apply_env_at(&store.dir(id), cache, vmm, id)
+fn apply_env(
+    store: &Store,
+    cache: &Cache,
+    vmm: &Hypervisor,
+    id: Uuid,
+    log: &crate::progress::Progress,
+) -> Result<(), ActionError> {
+    apply_env_at(&store.dir(id), cache, vmm, id, log)
 }
 
 /// Ready-snapshot hatch RESET of /home/snow leaves environment.applied matching
@@ -547,14 +578,18 @@ fn apply_env_at(
     cache: &Cache,
     vmm: &Hypervisor,
     id: Uuid,
+    log: &crate::progress::Progress,
 ) -> Result<(), ActionError> {
     let stamp = crate::environment::fingerprint(dir)?;
     let mark = dir.join("environment.applied");
     if std::fs::read_to_string(&mark).ok().as_deref() == Some(stamp.as_str()) {
+        log.line(format!("sandbox {id}: Environment already applied"));
         return Ok(());
     }
-    let realized = crate::nix::realize_environment(&dir.join("environment"), cache)?;
+    log.line(format!("sandbox {id}: applying Environment"));
+    let realized = crate::nix::realize_environment(&dir.join("environment"), cache, log)?;
     crate::agent::nar_in(vmm, id, &realized.export).map_err(ActionError::Failed)?;
+    log.line(format!("sandbox {id}: activating Environment"));
     crate::agent::profile(vmm, id, &realized.out_path).map_err(ActionError::Failed)?;
     std::fs::write(&mark, stamp).map_err(|_| ActionError::Internal)?;
     Ok(())
@@ -587,19 +622,34 @@ fn halt(
     store.stop(id)
 }
 
-fn kick_replenish(vmm: Arc<Hypervisor>, cache: Arc<Cache>, sandboxes: PathBuf) {
-    std::thread::spawn(move || wait_ready_snapshot(&vmm, &cache, &sandboxes));
+fn kick_replenish(
+    vmm: Arc<Hypervisor>,
+    cache: Arc<Cache>,
+    sandboxes: PathBuf,
+    log: crate::progress::Progress,
+) {
+    std::thread::spawn(move || wait_ready_snapshot(&vmm, &cache, &sandboxes, &log));
 }
 
-fn wait_ready_snapshot(vmm: &Hypervisor, cache: &Cache, sandboxes: &std::path::Path) {
+fn wait_ready_snapshot(
+    vmm: &Hypervisor,
+    cache: &Cache,
+    sandboxes: &std::path::Path,
+    log: &crate::progress::Progress,
+) {
     crate::ready::ensure(
         || vmm.ready_snapshot_exists(sandboxes),
-        || warm_once(vmm, cache, sandboxes),
+        || warm_once(vmm, cache, sandboxes, log),
     );
 }
 
-fn warm_once(vmm: &Hypervisor, cache: &Cache, sandboxes: &std::path::Path) -> Result<(), String> {
-    eprintln!("ready snapshot: warming");
+fn warm_once(
+    vmm: &Hypervisor,
+    cache: &Cache,
+    sandboxes: &std::path::Path,
+    log: &crate::progress::Progress,
+) -> Result<(), String> {
+    log.line("ready snapshot: warming");
     let dir = sandboxes.join(".warm");
     let _ = std::fs::remove_dir_all(&dir);
     let id = Uuid::new_v4();
@@ -608,7 +658,7 @@ fn warm_once(vmm: &Hypervisor, cache: &Cache, sandboxes: &std::path::Path) -> Re
         crate::environment::write_default(&dir).map_err(|e| e.to_string())?;
         vmm.start_cold(id, &dir, Limits::default())?;
         crate::agent::wait_ready(vmm, id, std::time::Duration::from_secs(180))?;
-        apply_env_at(&dir, cache, vmm, id).map_err(|e| e.to_string())?;
+        apply_env_at(&dir, cache, vmm, id, log).map_err(|e| e.to_string())?;
         vmm.save_and_stop(id, &dir.join(SAVE_NAME))?;
         Ok::<(), String>(())
     })();
@@ -616,6 +666,9 @@ fn warm_once(vmm: &Hypervisor, cache: &Cache, sandboxes: &std::path::Path) -> Re
         let _ = vmm.stop(id);
     }
     let _ = std::fs::remove_dir_all(&dir);
+    if run.is_ok() {
+        log.line("ready snapshot: ready");
+    }
     run
 }
 
@@ -629,7 +682,9 @@ pub fn resume_and_warm(state: AppState) {
         };
         let cache = state.cache.clone();
         let root = state.store.root().to_path_buf();
-        let _ = tokio::task::spawn_blocking(move || wait_ready_snapshot(&vmm, &cache, &root)).await;
+        let log = state.progress.clone();
+        let _ = tokio::task::spawn_blocking(move || wait_ready_snapshot(&vmm, &cache, &root, &log))
+            .await;
     });
 }
 
@@ -745,6 +800,7 @@ mod tests {
                 user: dir.path().join("templates"),
             }),
             resume: Arc::new(crate::resume::Resume::open(dir.path().join("running.json"))),
+            progress: crate::progress::Progress::new(),
             vmm: None,
             agent_options: Arc::new(Ok(serde_json::json!({
                 "programs": [
@@ -814,6 +870,22 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn progress_lists_host_log_lines() {
+        let (_dir, state) = harness();
+        state.progress.line("sandbox start");
+        let (status, json) = send(
+            router(state),
+            authed(Request::get("http://127.0.0.1/api/v1/progress"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let lines = json["lines"].as_array().unwrap();
+        assert_eq!(lines.last().unwrap(), "sandbox start");
     }
 
     #[tokio::test]

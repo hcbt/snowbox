@@ -31,6 +31,7 @@ Reset puts the Sandbox back to Create: restores the Environment as it was at Cre
 | Method | Path | Meaning |
 | --- | --- | --- |
 | `GET` | `/health` | `{"ok":true}` |
+| `GET` | `/progress` | Host work log (`{"lines":["…"]}`). New Sandbox, Start, ready-snapshot warm, Environment realize. Last 2000 lines. |
 | `GET` | `/sandboxes` | List |
 | `POST` | `/sandboxes` | Create. Body `{"name": "...", "limits": {...}, "template": "empty", "environment": {...}}` — all optional. `template` is a Template name. `environment` is optional `config.json` (Customize at Create). `201` |
 | `GET` | `/templates` | Shipped and saved Templates. |

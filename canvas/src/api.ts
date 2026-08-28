@@ -181,6 +181,7 @@ export const api = {
       body: JSON.stringify({ limits }),
     }),
   agentOptions: () => json<{ programs: AgentProgram[] }>("/api/v1/agent-options"),
+  progress: () => json<{ lines: string[] }>("/api/v1/progress"),
   environment: (id: string) => json<EnvironmentDoc>(`/api/v1/sandboxes/${id}/environment`),
   saveEnvironment: (id: string, config: EnvironmentDoc) =>
     json<EnvironmentDoc>(`/api/v1/sandboxes/${id}/environment`, {

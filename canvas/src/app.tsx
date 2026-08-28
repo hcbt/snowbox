@@ -3,7 +3,7 @@ import { Term } from "./term";
 import { Frame } from "./frame";
 import { RootMenu } from "./menu";
 import { OverlayDialog } from "./dialogs";
-import { placeOverlay, type Overlay } from "./overlay";
+import { overlayZ, placeOverlay, type Overlay } from "./overlay";
 import { api, type Layout, type Sandbox, type WindowRec } from "./api";
 import { sandboxesWithoutWindows } from "./sandbox-icons";
 import { menuHit, type MenuHit } from "./menu-target";
@@ -27,6 +27,12 @@ export function App() {
   const [status, setStatus] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [ready, setReady] = createSignal(false);
+  const [logOpen, setLogOpen] = createSignal(false);
+  const [logLines, setLogLines] = createSignal<string[]>([]);
+  const [logX, setLogX] = createSignal(240);
+  const [logY, setLogY] = createSignal(72);
+  const [logW, setLogW] = createSignal(560);
+  const [logH, setLogH] = createSignal(280);
 
   const refresh = async () => {
     const [s, l] = await Promise.all([api.sandboxes(), api.layout()]);
@@ -92,7 +98,8 @@ export function App() {
     queueMicrotask(() => focusTerm(id));
   };
 
-  const run = async (fn: () => Promise<void>, done = "") => {
+  const run = async (fn: () => Promise<void>, done = "", log = false) => {
+    if (log) setLogOpen(true);
     setBusy(true);
     setStatus("");
     try {
@@ -107,6 +114,19 @@ export function App() {
       setBusy(false);
     }
   };
+
+  onSettled(() => {
+    if (!logOpen()) return;
+    const tick = () => {
+      api
+        .progress()
+        .then((r) => setLogLines(r.lines))
+        .catch(() => {});
+    };
+    tick();
+    const t = setInterval(tick, 250);
+    return () => clearInterval(t);
+  });
 
   const openMenu = (e: MouseEvent, spec: { windowId?: string; sandboxId?: string } = {}) => {
     e.preventDefault();
@@ -195,8 +215,64 @@ export function App() {
           />
         )}
       </Show>
+      <Show when={logOpen()}>
+        <LogWindow
+          lines={logLines()}
+          x={logX()}
+          y={logY()}
+          w={logW()}
+          h={logH()}
+          onMove={(x, y) => {
+            setLogX(x);
+            setLogY(y);
+          }}
+          onResize={(w, h) => {
+            setLogW(w);
+            setLogH(h);
+          }}
+          onClose={() => setLogOpen(false)}
+        />
+      </Show>
       <StatusLine busy={busy()} status={status()} />
     </div>
+  );
+}
+
+function LogWindow(props: {
+  lines: string[];
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  onMove: (x: number, y: number) => void;
+  onResize: (w: number, h: number) => void;
+  onClose: () => void;
+}) {
+  onSettled(() => {
+    const el = document.querySelector("[data-log]");
+    if (el) el.scrollTop = el.scrollHeight;
+  });
+  return (
+    <Frame
+      title="log"
+      x={props.x}
+      y={props.y}
+      w={props.w}
+      h={props.h}
+      z={overlayZ}
+      onMove={props.onMove}
+      onResize={props.onResize}
+      onClose={props.onClose}
+    >
+      <div
+        data-log
+        class="h-full overflow-auto bg-white p-2 font-mono text-[12px] leading-4 text-black"
+      >
+        <For each={props.lines} fallback={<div class="text-neutral-500">waiting…</div>}>
+          {(line) => <div>{line()}</div>}
+        </For>
+      </div>
+    </Frame>
   );
 }
 
@@ -223,7 +299,7 @@ function IconManager(props: {
   openMenu: (e: MouseEvent, spec?: { windowId?: string; sandboxId?: string }) => void;
   patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
   raise: (id: string) => void;
-  run: (fn: () => Promise<void>) => Promise<boolean>;
+  run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
   patchIcon: (patch: { x?: number; y?: number; w?: number; h?: number }) => void;
   saveIcon: () => void;
   hide: () => void;
@@ -258,7 +334,7 @@ function IconManager(props: {
                   props.patchWin(w().id, { iconified: false }, true);
                   props.raise(w().id);
                   if (!props.live(w().sandbox) && !props.busy) {
-                    props.run(() => api.start(w().sandbox));
+                    props.run(() => api.start(w().sandbox), "", true);
                   }
                 }}
                 onContextMenu={(e) => props.openMenu(e, { windowId: w().id })}
@@ -277,10 +353,14 @@ function IconManager(props: {
                 class="block w-full border-0 border-t border-twm-line bg-twm px-2 py-0.5 text-left font-bold text-twm-muted hover:bg-twm-hi hover:text-white"
                 onClick={() => {
                   if (props.busy) return;
-                  props.run(async () => {
-                    if (s().state !== "running") await api.start(s().id);
-                    await api.openWindow(s().id);
-                  });
+                  props.run(
+                    async () => {
+                      if (s().state !== "running") await api.start(s().id);
+                      await api.openWindow(s().id);
+                    },
+                    "",
+                    true,
+                  );
                 }}
                 onContextMenu={(e) => props.openMenu(e, { sandboxId: s().id })}
               >
@@ -303,7 +383,7 @@ function CanvasWindows(props: {
   openMenu: (e: MouseEvent, spec?: { windowId?: string; sandboxId?: string }) => void;
   patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
   raise: (id: string) => void;
-  run: (fn: () => Promise<void>) => Promise<boolean>;
+  run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
   save: () => void;
   onEnvironment: (id: string) => void;
 }) {
@@ -322,7 +402,7 @@ function CanvasWindows(props: {
             onMouseDown={() => {
               props.raise(w().id);
               if (!props.live(w().sandbox) && !props.busy) {
-                props.run(() => api.start(w().sandbox));
+                props.run(() => api.start(w().sandbox), "", true);
               }
             }}
             onContextMenu={(e) => props.openMenu(e, { windowId: w().id })}
@@ -365,7 +445,7 @@ function AppMenu(props: {
   setStatus: (s: string) => void;
   patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
   raise: (id: string) => void;
-  run: (fn: () => Promise<void>) => Promise<boolean>;
+  run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
   save: (next: Layout) => void;
 }) {
   const at = placeOverlay();
@@ -412,7 +492,7 @@ function AppMenu(props: {
       }}
       onStart={() => {
         const box = sb();
-        if (box) props.run(() => api.start(box.id).then(() => undefined));
+        if (box) props.run(() => api.start(box.id).then(() => undefined), "", true);
       }}
       onStop={() => {
         const box = sb();

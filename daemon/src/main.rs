@@ -19,6 +19,7 @@ mod layout;
 #[cfg(test)]
 mod nar;
 mod nix;
+mod progress;
 mod pty;
 mod publish;
 mod ready;
@@ -116,6 +117,7 @@ async fn run_daemon() -> Result<()> {
         }),
         publish: publish::Publisher::default(),
         sessions: pty::Sessions::default(),
+        progress: progress::Progress::new(),
         vmm,
         resume: Arc::new(resume::Resume::open(data.join("running.json"))),
         agent_options,

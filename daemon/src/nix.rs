@@ -1,7 +1,7 @@
 //! posix_spawn client for `snowbox-eval`. This crate must not link
 //! nix-bindings / libgc (ADR 0019).
 
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::cache::Cache;
+use crate::progress::Progress;
 use crate::sandbox::ActionError;
 
 pub struct Realized {
@@ -86,12 +87,20 @@ fn path_flake_url(path: &Path) -> String {
     enc
 }
 
-pub fn realize_environment(flake_dir: &Path, cache: &Cache) -> Result<Realized, ActionError> {
+pub fn realize_environment(
+    flake_dir: &Path,
+    cache: &Cache,
+    log: &Progress,
+) -> Result<Realized, ActionError> {
+    log.line("realizing Environment");
     let work = WorkDir::new()?;
-    let resp = call(&Request::Realize {
-        flake_dir: flake_dir.to_path_buf(),
-        work_dir: work.0.clone(),
-    })?;
+    let resp = call(
+        &Request::Realize {
+            flake_dir: flake_dir.to_path_buf(),
+            work_dir: work.0.clone(),
+        },
+        log,
+    )?;
     for nar in &resp.nars {
         let bytes = std::fs::read(&nar.nar_path).map_err(|e| {
             ActionError::Failed(format!("read NAR {}: {e}", nar.nar_path.display()))
@@ -109,6 +118,7 @@ pub fn realize_environment(flake_dir: &Path, cache: &Cache) -> Result<Realized, 
     let out_path = resp
         .out_path
         .ok_or_else(|| ActionError::Failed("snowbox-eval returned no out_path".into()))?;
+    log.line(format!("Environment {out_path}"));
     Ok(Realized { out_path, export })
 }
 
@@ -131,17 +141,25 @@ fn eval_bin() -> Result<PathBuf, ActionError> {
 }
 
 /// `std::process::Command` on macOS is posix_spawn. Do not libc::fork.
-fn call(req: &Request) -> Result<Response, ActionError> {
-    call_bin(&eval_bin()?, req)
+fn call(req: &Request, log: &Progress) -> Result<Response, ActionError> {
+    call_bin(&eval_bin()?, req, log)
 }
 
-fn call_bin(bin: &Path, req: &Request) -> Result<Response, ActionError> {
+fn call_bin(bin: &Path, req: &Request, log: &Progress) -> Result<Response, ActionError> {
     let mut child = Command::new(bin)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| ActionError::Failed(format!("spawn snowbox-eval ({}): {e}", bin.display())))?;
+    let pump = child.stderr.take().map(|err| {
+        let log = log.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(err).lines().map_while(Result::ok) {
+                log.line(line);
+            }
+        })
+    });
     {
         let mut stdin = child.stdin.take().ok_or(ActionError::Internal)?;
         let mut line = serde_json::to_vec(req).map_err(|_| ActionError::Internal)?;
@@ -153,6 +171,9 @@ fn call_bin(bin: &Path, req: &Request) -> Result<Response, ActionError> {
     let out = child
         .wait_with_output()
         .map_err(|e| ActionError::Failed(e.to_string()))?;
+    if let Some(pump) = pump {
+        let _ = pump.join();
+    }
     let stdout = String::from_utf8_lossy(&out.stdout);
     let line = stdout.lines().next().unwrap_or("");
     let resp: Response = serde_json::from_str(line).map_err(|_| {
@@ -252,6 +273,7 @@ mod tests {
                 expr: "\"x\"".into(),
                 origin: "<t>".into(),
             },
+            &Progress::new(),
         )
         .unwrap_err();
         match err {

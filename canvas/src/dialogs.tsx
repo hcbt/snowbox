@@ -156,7 +156,7 @@ export function OverlayDialog(props: {
   move: (x: number, y: number) => void;
   pickSandbox: (id: string) => void;
   close: () => void;
-  run: (fn: () => Promise<void>, done?: string) => Promise<boolean>;
+  run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
 }) {
   const [name, setName] = createSignal("");
   const [cpu, setCpu] = createSignal(String(props.sandbox?.limits.cpu ?? 2));
@@ -369,7 +369,7 @@ async function submitOverlay(
     overlay: Overlay;
     sandbox?: Sandbox;
     close: () => void;
-    run: (fn: () => Promise<void>, done?: string) => Promise<boolean>;
+    run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
   },
   form: {
     name: string;
@@ -398,14 +398,20 @@ async function submitOverlay(
 
   let ok = false;
   if (ov.kind === "sandbox") {
-    ok = await props.run(async () => {
-      const env = form.customize
-        ? environmentBody(form.envDoc, form.envCfg, form.envVars)
-        : undefined;
-      const sb = await api.create(form.name || undefined, form.tpl || undefined, env);
-      await api.start(sb.id);
-      await api.openWindow(sb.id);
-    });
+    props.close();
+    await props.run(
+      async () => {
+        const env = form.customize
+          ? environmentBody(form.envDoc, form.envCfg, form.envVars)
+          : undefined;
+        const sb = await api.create(form.name || undefined, form.tpl || undefined, env);
+        await api.start(sb.id);
+        await api.openWindow(sb.id);
+      },
+      "",
+      true,
+    );
+    return;
   } else if (ov.kind === "templates") {
     if (!form.tplName.trim()) return;
     ok = await props.run(() =>
@@ -447,6 +453,7 @@ async function submitOverlay(
           .saveEnvironment(ov.id, environmentBody(form.envDoc, form.envCfg, form.envVars))
           .then(() => undefined),
       running ? "" : "applies on Start",
+      running,
     );
   } else if (ov.kind === "copy") {
     ok = await props.run(() =>
@@ -457,7 +464,7 @@ async function submitOverlay(
   } else if (ov.kind === "destroy") {
     ok = await props.run(() => api.destroy(ov.id));
   } else if (ov.kind === "reset") {
-    ok = await props.run(() => api.reset(ov.id).then(() => undefined));
+    ok = await props.run(() => api.reset(ov.id).then(() => undefined), "", true);
   }
   if (ok) props.close();
 }
@@ -497,7 +504,7 @@ function OverlayFields(props: {
   setTplName: (v: string) => void;
   optErr: string;
   pickSandbox: (id: string) => void;
-  run: (fn: () => Promise<void>, done?: string) => Promise<boolean>;
+  run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
 }) {
   const ov = () => props.overlay;
   return (
