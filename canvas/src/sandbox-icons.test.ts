@@ -7,7 +7,7 @@ const sb = (id: string, name: string, state: Sandbox["state"]): Sandbox => ({
   name,
   state,
   home: [".gitconfig"],
-  limits: { cpu: 2, ram: 2147483648, disk: 17179869184 },
+  limits: { cpu: 2, ram: 2147483648, disk: 8589934592 },
 });
 
 const win = (sandbox: string): WindowRec => ({

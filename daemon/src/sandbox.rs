@@ -10,7 +10,7 @@ const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
 const DEFAULT_CPU: u32 = 2;
 const DEFAULT_RAM: u64 = 2 * GIB;
-const DEFAULT_DISK: u64 = 16 * GIB;
+const DEFAULT_DISK: u64 = 8 * GIB;
 const MIN_CPU: u32 = 1;
 const MIN_RAM: u64 = 512 * MIB;
 const MIN_DISK: u64 = GIB;
@@ -603,7 +603,7 @@ mod tests {
         assert_eq!(sb.limits, Limits::default());
         assert_eq!(sb.limits.cpu, 2);
         assert_eq!(sb.limits.ram, 2 * GIB);
-        assert_eq!(sb.limits.disk, 16 * GIB);
+        assert_eq!(sb.limits.disk, 8 * GIB);
     }
 
     #[test]

@@ -166,7 +166,7 @@ export function OverlayDialog(props: {
     String((props.sandbox?.limits.ram ?? 2147483648) / (1024 * 1024)),
   );
   const [disk, setDisk] = createSignal(
-    String((props.sandbox?.limits.disk ?? 17179869184) / (1024 * 1024 * 1024)),
+    String((props.sandbox?.limits.disk ?? 8589934592) / (1024 * 1024 * 1024)),
   );
   const [tpl, setTpl] = createSignal("empty");
   const [templates, setTemplates] = createSignal<Template[]>([]);

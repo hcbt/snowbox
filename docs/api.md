@@ -22,7 +22,7 @@ Many Sandboxes may run at once. They share Host CPU, RAM, and disk capacity, not
 
 The Cache is a Snowbox store under the data directory (`snowbox/cache`), a `file://` substituter the Daemon writes. Guests copy from it; they do not share `/nix/store` with the Host.
 
-JSON `state` is `stopped` or `running`. `booting` is true while Start is in progress (the Sandbox stays `stopped` until Start finishes). `home` is always `[]` (Reset wipes the Linux home; there is no keep-list). `limits` are per-Sandbox CPU count, RAM bytes, and disk bytes. Defaults: 2 CPUs, 2 GiB RAM, 16 GiB disk. Set at create; PATCH later. CPU and RAM take effect at start. Disk is the guest root image size on the Host; growing applies at start, shrinking needs Reset first.
+JSON `state` is `stopped` or `running`. `booting` is true while Start is in progress (the Sandbox stays `stopped` until Start finishes). `home` is always `[]` (Reset wipes the Linux home; there is no keep-list). `limits` are per-Sandbox CPU count, RAM bytes, and disk bytes. Defaults: 2 CPUs, 2 GiB RAM, 8 GiB disk. Set at create; PATCH later. CPU and RAM take effect at start. Disk is the guest root image size on the Host; growing applies at start, shrinking needs Reset first.
 
 Copy-in and copy-out run only while `stopped` (`409` `sandbox is running` otherwise). Non-empty destination without `"replace": true` → `409` `replace required`. No merge. A directory source is copied as the contents of `/workspace`; a file lands as `/workspace/{filename}`. `from` and `to` are absolute Host paths (`.`/`..` resolved). copy-out `to` cannot be `/`, `/Users`, `/home`, the home directory root, `/etc`, `/nix/store`, or the Snowbox data directory.
 
@@ -58,7 +58,7 @@ Create body:
 ```json
 {
   "name": "work",
-  "limits": { "cpu": 2, "ram": 2147483648, "disk": 17179869184 }
+  "limits": { "cpu": 2, "ram": 2147483648, "disk": 8589934592 }
 }
 ```
 
@@ -73,7 +73,7 @@ Sandbox object:
   "state": "stopped",
   "booting": false,
   "home": [],
-  "limits": { "cpu": 2, "ram": 2147483648, "disk": 17179869184 }
+  "limits": { "cpu": 2, "ram": 2147483648, "disk": 8589934592 }
 }
 ```
 
