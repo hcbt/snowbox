@@ -262,6 +262,8 @@ impl Store {
         let _ = self.get(id)?;
         let dir = self.dir(id);
         if dir.exists() {
+            make_deletable(&dir)
+                .map_err(|e| ActionError::Failed(format!("destroy disk: {e}")))?;
             fs::remove_dir_all(&dir)
                 .map_err(|e| ActionError::Failed(format!("destroy disk: {e}")))?;
         }
@@ -373,6 +375,7 @@ fn reset_tree(dir: &Path) -> Result<(), ActionError> {
 
     let home = dir.join("home");
     if home.exists() {
+        make_deletable(&home).map_err(|_| ActionError::Internal)?;
         fs::remove_dir_all(&home).map_err(|_| ActionError::Internal)?;
     }
     fs::create_dir_all(&home).map_err(|_| ActionError::Internal)?;
@@ -533,6 +536,42 @@ fn is_unix_home_root(path: &Path) -> bool {
         [std::path::Component::RootDir, std::path::Component::Normal(dir), std::path::Component::Normal(_name)]
             if *dir == "Users" || *dir == "home"
     )
+}
+
+/// home-manager writes `home/.nix-profile` as 0555. `remove_dir_all`
+/// cannot unlink children of a directory without owner-write.
+fn make_deletable(path: &Path) -> std::io::Result<()> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if meta.file_type().is_symlink() {
+        return Ok(());
+    }
+    let mut perm = meta.permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut mode = perm.mode();
+        mode |= 0o200;
+        if meta.is_dir() {
+            mode |= 0o100;
+        }
+        perm.set_mode(mode);
+        fs::set_permissions(path, perm)?;
+    }
+    #[cfg(not(unix))]
+    {
+        perm.set_readonly(false);
+        let _ = fs::set_permissions(path, perm);
+    }
+    if meta.is_dir() {
+        for entry in fs::read_dir(path)? {
+            make_deletable(&entry?.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn is_non_empty(path: &Path) -> bool {
@@ -902,6 +941,28 @@ mod tests {
             err,
             ActionError::BadRequest("path must be absolute")
         ));
+    }
+
+    #[test]
+    fn destroy_removes_a_readonly_nix_profile() {
+        let (tmp, store) = store();
+        let sb = store.create(None).unwrap();
+        let bin = store.dir(sb.id).join("home/.nix-profile/bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("hello"), "x").unwrap();
+        let profile = store.dir(sb.id).join("home/.nix-profile");
+        let mut perm = fs::metadata(&profile).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perm.set_mode(0o555);
+            fs::set_permissions(&profile, perm.clone()).unwrap();
+            fs::set_permissions(&bin, perm).unwrap();
+        }
+        store.destroy(sb.id).unwrap();
+        assert!(!store.dir(sb.id).exists());
+        let reopened = Store::open(tmp.path()).unwrap();
+        assert!(reopened.list().is_empty());
     }
 
     #[test]
