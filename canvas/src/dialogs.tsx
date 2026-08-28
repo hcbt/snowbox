@@ -157,6 +157,7 @@ export function OverlayDialog(props: {
   pickSandbox: (id: string) => void;
   close: () => void;
   busy?: boolean;
+  refresh?: () => void;
   run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
 }) {
   const [name, setName] = createSignal("");
@@ -371,6 +372,7 @@ async function submitOverlay(
     overlay: Overlay;
     sandbox?: Sandbox;
     close: () => void;
+    refresh?: () => void;
     run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
   },
   form: {
@@ -407,8 +409,9 @@ async function submitOverlay(
           ? environmentBody(form.envDoc, form.envCfg, form.envVars)
           : undefined;
         const sb = await api.create(form.name || undefined, form.tpl || undefined, env);
-        await api.start(sb.id);
         await api.openWindow(sb.id);
+        props.refresh?.();
+        await api.start(sb.id);
       },
       "",
       true,

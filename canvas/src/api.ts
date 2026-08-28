@@ -4,6 +4,7 @@ export type Sandbox = {
   id: string;
   name: string;
   state: "stopped" | "running";
+  booting?: boolean;
   home: string[];
   limits: Limits;
 };

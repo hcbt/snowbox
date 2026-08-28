@@ -62,6 +62,7 @@ pub struct Sandbox {
     pub id: Uuid,
     pub name: String,
     pub state: State,
+    pub booting: bool,
     pub home: Vec<String>,
     pub limits: Limits,
 }
@@ -349,6 +350,7 @@ fn view(rec: &Record) -> Sandbox {
         id: rec.meta.id,
         name: rec.meta.name.clone(),
         state: rec.state,
+        booting: rec.booting,
         home: rec.meta.home.clone(),
         limits: rec.meta.limits,
     }
@@ -801,6 +803,21 @@ mod tests {
         assert!(matches!(err, ActionError::Conflict("already running")));
         store.abort_boot(sb.id);
         store.begin_boot(sb.id).unwrap();
+    }
+
+    #[test]
+    fn begin_boot_is_listed_while_start_runs() {
+        let (_tmp, store) = store();
+        let sb = store.create(None).unwrap();
+        assert!(!sb.booting);
+        store.begin_boot(sb.id).unwrap();
+        let mid = store.get(sb.id).unwrap();
+        assert!(mid.booting);
+        assert_eq!(mid.state, State::Stopped);
+        store.start(sb.id).unwrap();
+        let running = store.get(sb.id).unwrap();
+        assert!(!running.booting);
+        assert_eq!(running.state, State::Running);
     }
 
     #[test]

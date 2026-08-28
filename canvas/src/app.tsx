@@ -203,6 +203,9 @@ export function App() {
             }}
             close={() => setOverlay(null)}
             busy={busy()}
+            refresh={() => {
+              void refresh();
+            }}
             run={run}
           />
         )}
@@ -371,7 +374,7 @@ function IconManager(props: {
                 }}
                 onContextMenu={(e) => props.openMenu(e, { sandboxId: s().id })}
               >
-                {s().name} ({s().state})
+                {s().name} ({s().booting ? "starting" : s().state})
               </button>
             )}
           </For>
@@ -379,6 +382,12 @@ function IconManager(props: {
       </Frame>
     </Show>
   );
+}
+
+function windowStatus(sandboxes: Sandbox[], id: string): string {
+  const sb = sandboxes.find((s) => s.id === id);
+  if (sb?.booting) return "starting…";
+  return `stopped — Start ${sb?.name ?? "this Sandbox"}`;
 }
 
 function CanvasWindows(props: {
@@ -423,8 +432,7 @@ function CanvasWindows(props: {
               when={props.live(w().sandbox)}
               fallback={
                 <div class="flex h-full items-center justify-center font-twm text-[13px] text-neutral-500">
-                  stopped — Start{" "}
-                  {props.sandboxes.find((s) => s.id === w().sandbox)?.name ?? "this Sandbox"}
+                  {windowStatus(props.sandboxes, w().sandbox)}
                 </div>
               }
             >

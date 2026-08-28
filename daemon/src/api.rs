@@ -472,7 +472,6 @@ fn boot(
     match boot_claimed(&store, &cache, &vmm, id, &log) {
         Ok(sandbox) => {
             resume.mark(id);
-            kick_replenish(vmm, cache, store.root().to_path_buf(), log);
             Ok(sandbox)
         }
         Err(err) => {
@@ -485,8 +484,8 @@ fn boot(
 
 fn boot_claimed(
     store: &Store,
-    cache: &Cache,
-    vmm: &Hypervisor,
+    cache: &Arc<Cache>,
+    vmm: &Arc<Hypervisor>,
     id: Uuid,
     log: &crate::progress::Progress,
 ) -> Result<crate::sandbox::Sandbox, ActionError> {
@@ -497,11 +496,21 @@ fn boot_claimed(
     if hatching {
         log.line(format!("sandbox {id}: waiting for ready snapshot"));
         wait_ready_snapshot(vmm, cache, store.root(), log);
+        if !vmm.ready_snapshot_exists(store.root()) {
+            log.line("ready snapshot: missing; cold boot");
+        }
     }
     log.line(format!("sandbox {id}: starting hypervisor"));
-    let kind = vmm
-        .start(id, &dir, sandbox.limits)
-        .map_err(ActionError::Failed)?;
+    let started = vmm.start(id, &dir, sandbox.limits);
+    if hatching {
+        kick_replenish(
+            vmm.clone(),
+            cache.clone(),
+            store.root().to_path_buf(),
+            log.clone(),
+        );
+    }
+    let kind = started.map_err(ActionError::Failed)?;
     log.line(format!(
         "sandbox {id}: hypervisor {}ms ({kind:?})",
         t0.elapsed().as_millis()
