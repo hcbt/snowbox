@@ -18,6 +18,73 @@ import { overlayZ, type Overlay } from "./overlay";
 const field =
   "mt-0.5 w-full box-border border border-neutral-600 px-1 py-0.5 font-mono text-[13px]";
 const label = "mt-1.5 block font-bold";
+const pickItem =
+  "block w-full px-1 py-0.5 text-left font-mono text-[13px] hover:bg-twm-hi hover:text-white";
+
+type PickOption = { value: string; label: string };
+
+function overlayBox(kind: Overlay["kind"]): [number, number] {
+  if (kind === "environment" || kind === "templates") return [400, 480];
+  if (kind === "sandbox") return [400, 280];
+  return [360, 220];
+}
+
+function templatePicks(templates: Template[]): PickOption[] {
+  const out: PickOption[] = [{ value: "empty", label: "empty" }];
+  for (const t of templates) {
+    if (t.name === "empty") continue;
+    out.push({ value: t.name, label: t.shipped ? t.name : `${t.name} (saved)` });
+  }
+  return out;
+}
+
+function FieldSelect(props: {
+  value: string;
+  options: PickOption[];
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = createSignal(false);
+  const current = () =>
+    props.options.find((o) => o.value === props.value)?.label ?? props.placeholder ?? "";
+  onSettled(() => {
+    if (!open()) return;
+    const close = () => setOpen(false);
+    window.addEventListener("mousedown", close);
+    return () => window.removeEventListener("mousedown", close);
+  });
+  return (
+    <div class="relative mt-0.5" onMouseDown={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        class={`${field} mt-0 flex items-center justify-between gap-2 bg-white text-left`}
+        onClick={() => setOpen(!open())}
+      >
+        <span class="min-w-0 truncate">{current()}</span>
+        <span class="shrink-0 text-[10px] leading-none">{open() ? "▴" : "▾"}</span>
+      </button>
+      <Show when={open()}>
+        <div class="absolute top-full left-0 z-40 max-h-40 w-full overflow-auto border border-neutral-600 border-t-0 bg-white">
+          <For each={props.options} keyed={(o) => o.value}>
+            {(o) => (
+              <button
+                type="button"
+                class={pickItem}
+                classList={{ "bg-twm text-white": o().value === props.value }}
+                onClick={() => {
+                  props.onChange(o().value);
+                  setOpen(false);
+                }}
+              >
+                {o().label}
+              </button>
+            )}
+          </For>
+        </div>
+      </Show>
+    </div>
+  );
+}
 
 function overlayTitle(ov: Overlay, sandboxName: string): string {
   switch (ov.kind) {
@@ -113,6 +180,9 @@ export function OverlayDialog(props: {
   const [envVars, setEnvVars] = createSignal("");
   const [tplName, setTplName] = createSignal("");
   const [optErr, setOptErr] = createSignal("");
+  const start = overlayBox(props.overlay.kind);
+  const [boxW, setBoxW] = createSignal(start[0]);
+  const [boxH, setBoxH] = createSignal(start[1]);
 
   onSettled(() => {
     loadOverlay(props.overlay, props.sandbox, {
@@ -152,57 +222,65 @@ export function OverlayDialog(props: {
       title={overlayTitle(props.overlay, sbName())}
       x={props.overlay.x}
       y={props.overlay.y}
+      w={boxW()}
+      h={boxH()}
       z={overlayZ}
       onMove={props.move}
+      onResize={(w, h) => {
+        setBoxW(w);
+        setBoxH(h);
+      }}
       onClose={props.close}
     >
       <form
-        class="min-w-80 bg-white px-3.5 py-3 font-twm text-black"
+        class="flex h-full min-h-0 flex-col bg-white font-twm text-black"
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
         }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <OverlayFields
-          overlay={props.overlay}
-          sandboxName={sbName()}
-          sandboxes={props.sandboxes}
-          name={name()}
-          setName={setName}
-          tpl={tpl()}
-          setTpl={setTpl}
-          templates={templates()}
-          cpu={cpu()}
-          setCpu={setCpu}
-          ram={ram()}
-          setRam={setRam}
-          disk={disk()}
-          setDisk={setDisk}
-          path={path()}
-          setPath={setPath}
-          pubPort={pubPort()}
-          setPubPort={setPubPort}
-          hostPort={hostPort()}
-          setHostPort={setHostPort}
-          published={published()}
-          replace={replace()}
-          setReplace={setReplace}
-          agents={agents()}
-          envCfg={envCfg()}
-          setEnvCfg={setEnvCfg}
-          envVars={envVars()}
-          setEnvVars={setEnvVars}
-          customize={customize()}
-          setCustomize={setCustomize}
-          tplName={tplName()}
-          setTplName={setTplName}
-          optErr={optErr()}
-          pickSandbox={props.pickSandbox}
-          run={props.run}
-        />
+        <div class="min-h-0 flex-1 overflow-auto px-3.5 py-3">
+          <OverlayFields
+            overlay={props.overlay}
+            sandboxName={sbName()}
+            sandboxes={props.sandboxes}
+            name={name()}
+            setName={setName}
+            tpl={tpl()}
+            setTpl={setTpl}
+            templates={templates()}
+            cpu={cpu()}
+            setCpu={setCpu}
+            ram={ram()}
+            setRam={setRam}
+            disk={disk()}
+            setDisk={setDisk}
+            path={path()}
+            setPath={setPath}
+            pubPort={pubPort()}
+            setPubPort={setPubPort}
+            hostPort={hostPort()}
+            setHostPort={setHostPort}
+            published={published()}
+            replace={replace()}
+            setReplace={setReplace}
+            agents={agents()}
+            envCfg={envCfg()}
+            setEnvCfg={setEnvCfg}
+            envVars={envVars()}
+            setEnvVars={setEnvVars}
+            customize={customize()}
+            setCustomize={setCustomize}
+            tplName={tplName()}
+            setTplName={setTplName}
+            optErr={optErr()}
+            pickSandbox={props.pickSandbox}
+            run={props.run}
+          />
+        </div>
         <Show when={props.overlay.kind !== "sandboxes"}>
-          <div class="mt-3 flex justify-end gap-2">
+          <div class="flex shrink-0 justify-end gap-2 border-t border-neutral-300 px-3.5 py-2">
             <button
               type="button"
               class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
@@ -580,28 +658,17 @@ function NewSandboxFields(props: {
           onInput={(e) => props.setName(e.currentTarget.value)}
         />
       </label>
-      <label class={label}>
+      <div class={label}>
         template
-        <select
-          class={`${field} bg-white text-black`}
+        <FieldSelect
           value={props.tpl}
-          onChange={(e) => {
-            const name = e.currentTarget.value;
+          options={templatePicks(props.templates)}
+          onChange={(name) => {
             props.setTpl(name);
             if (props.customize) applyTemplateDoc(name, props.setEnvCfg, props.setEnvVars);
           }}
-        >
-          <option value="empty">empty</option>
-          <For each={props.templates.filter((t) => t.name !== "empty")} keyed={(t) => t.name}>
-            {(t) => (
-              <option value={t().name}>
-                {t().name}
-                {t().shipped ? "" : " (saved)"}
-              </option>
-            )}
-          </For>
-        </select>
-      </label>
+        />
+      </div>
       <label class="mt-2 flex items-center gap-2 font-bold">
         <input
           type="checkbox"
@@ -1015,23 +1082,21 @@ function TemplatesFields(props: {
       <p class="text-[12px]">
         Saved Templates only. empty cannot be overwritten. Existing Sandboxes are not changed.
       </p>
-      <label class={label}>
+      <div class={label}>
         template
-        <select
-          class={`${field} bg-white text-black`}
+        <FieldSelect
           value={props.tplName}
-          onChange={(e) => {
-            const name = e.currentTarget.value;
+          placeholder="pick a saved Template"
+          options={[
+            { value: "", label: "pick a saved Template" },
+            ...userTemplates().map((t) => ({ value: t.name, label: t.name })),
+          ]}
+          onChange={(name) => {
             props.setTplName(name);
             applyTemplateDoc(name, props.setEnvCfg, props.setEnvVars);
           }}
-        >
-          <option value="">pick a saved Template</option>
-          <For each={userTemplates()} keyed={(t) => t.name}>
-            {(t) => <option value={t().name}>{t().name}</option>}
-          </For>
-        </select>
-      </label>
+        />
+      </div>
       <Show when={props.tplName && selected()}>
         <EnvironmentFields
           agents={props.agents}
