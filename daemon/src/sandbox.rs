@@ -6,8 +6,6 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-const DEFAULT_HOME: &[&str] = &[".gitconfig"];
-
 const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
 const DEFAULT_CPU: u32 = 2;
@@ -173,7 +171,7 @@ impl Store {
         let meta = Meta {
             id,
             name,
-            home: DEFAULT_HOME.iter().map(|s| (*s).to_string()).collect(),
+            home: Vec::new(),
             limits,
         };
         let dir = self.dir(id);
@@ -185,6 +183,7 @@ impl Store {
         } else {
             crate::environment::write_default(&dir)?;
         }
+        crate::environment::snapshot_create(&dir)?;
         write_meta(&dir, &meta)?;
         let sandbox = view(&Record {
             meta: meta.clone(),
@@ -249,13 +248,12 @@ impl Store {
     }
 
     pub fn reset(&self, id: Uuid) -> Result<Sandbox, ActionError> {
-        let home = {
+        let _ = {
             let map = self.inner.lock().expect("sandbox store");
-            let rec = map.get(&id).ok_or(ActionError::NotFound)?;
-            rec.meta.home.clone()
+            map.get(&id).ok_or(ActionError::NotFound)?;
         };
         let dir = self.dir(id);
-        reset_tree(&dir, &home)?;
+        reset_tree(&dir)?;
         self.get(id)
     }
 
@@ -362,7 +360,10 @@ fn write_meta(dir: &Path, meta: &Meta) -> Result<(), ActionError> {
     fs::write(path, raw).map_err(|_| ActionError::Internal)
 }
 
-fn reset_tree(dir: &Path, home_allow: &[String]) -> Result<(), ActionError> {
+fn reset_tree(dir: &Path) -> Result<(), ActionError> {
+    crate::environment::restore_create(dir)?;
+    crate::environment::clear_secrets(dir);
+
     let system = dir.join("system");
     if system.exists() {
         fs::remove_dir_all(&system).map_err(|_| ActionError::Internal)?;
@@ -371,10 +372,9 @@ fn reset_tree(dir: &Path, home_allow: &[String]) -> Result<(), ActionError> {
 
     let home = dir.join("home");
     if home.exists() {
-        prune_home(&home, home_allow)?;
-    } else {
-        fs::create_dir_all(&home).map_err(|_| ActionError::Internal)?;
+        fs::remove_dir_all(&home).map_err(|_| ActionError::Internal)?;
     }
+    fs::create_dir_all(&home).map_err(|_| ActionError::Internal)?;
 
     fs::create_dir_all(dir.join("workspace")).map_err(|_| ActionError::Internal)?;
 
@@ -386,6 +386,7 @@ fn reset_tree(dir: &Path, home_allow: &[String]) -> Result<(), ActionError> {
             || name == "system"
             || name == "meta.json"
             || name == "environment"
+            || name == crate::environment::CREATE_DIR
         {
             continue;
         }
@@ -393,41 +394,6 @@ fn reset_tree(dir: &Path, home_allow: &[String]) -> Result<(), ActionError> {
         if path.is_dir() {
             fs::remove_dir_all(&path).map_err(|_| ActionError::Internal)?;
         } else {
-            fs::remove_file(&path).map_err(|_| ActionError::Internal)?;
-        }
-    }
-    Ok(())
-}
-
-fn prune_home(home: &Path, allow: &[String]) -> Result<(), ActionError> {
-    let allowed: Vec<PathBuf> = allow.iter().map(PathBuf::from).collect();
-    prune_dir(home, home, &allowed)
-}
-
-fn prune_dir(root: &Path, dir: &Path, allowed: &[PathBuf]) -> Result<(), ActionError> {
-    let entries: Vec<_> = fs::read_dir(dir)
-        .map_err(|_| ActionError::Internal)?
-        .collect::<Result<_, _>>()
-        .map_err(|_| ActionError::Internal)?;
-    for entry in entries {
-        let path = entry.path();
-        let rel = path.strip_prefix(root).map_err(|_| ActionError::Internal)?;
-        let keep = allowed.iter().any(|a| a == rel || a.starts_with(rel));
-        if path.is_dir() {
-            if keep {
-                prune_dir(root, &path, allowed)?;
-                if fs::read_dir(&path)
-                    .map_err(|_| ActionError::Internal)?
-                    .next()
-                    .is_none()
-                    && !allowed.iter().any(|a| a == rel)
-                {
-                    fs::remove_dir(&path).map_err(|_| ActionError::Internal)?;
-                }
-            } else {
-                fs::remove_dir_all(&path).map_err(|_| ActionError::Internal)?;
-            }
-        } else if !allowed.iter().any(|a| a == rel) {
             fs::remove_file(&path).map_err(|_| ActionError::Internal)?;
         }
     }
@@ -774,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_keeps_workspace_and_home_allowlist() {
+    fn reset_rewinds_environment_and_wipes_home() {
         let (_tmp, store) = store();
         let sb = store.create(Some("r".into())).unwrap();
         let dir = store.dir(sb.id);
@@ -784,6 +750,9 @@ mod tests {
         fs::write(dir.join("home/.npm/junk"), "no").unwrap();
         fs::write(dir.join("system/undeclared"), "tool").unwrap();
         fs::write(dir.join("extra"), "drop").unwrap();
+        let mut cfg = crate::environment::config(&dir).unwrap();
+        cfg["programs"]["claude-code"]["enable"] = serde_json::Value::Bool(true);
+        crate::environment::set_config(&dir, &cfg).unwrap();
 
         store.reset(sb.id).unwrap();
 
@@ -791,15 +760,16 @@ mod tests {
             fs::read_to_string(dir.join("workspace/proj")).unwrap(),
             "code"
         );
-        assert_eq!(
-            fs::read_to_string(dir.join("home/.gitconfig")).unwrap(),
-            "git"
-        );
+        assert!(!dir.join("home/.gitconfig").exists());
         assert!(!dir.join("home/.npm").exists());
         assert!(!dir.join("system/undeclared").exists());
         assert!(!dir.join("extra").exists());
         assert!(dir.join("system").is_dir());
         assert!(dir.join("environment/flake.nix").is_file());
+        assert_eq!(
+            crate::environment::config(&dir).unwrap()["programs"]["claude-code"]["enable"],
+            false
+        );
     }
 
     #[test]

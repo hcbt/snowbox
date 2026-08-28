@@ -13,6 +13,7 @@ export function Frame(props: {
   onMoveEnd?: () => void;
   onResize?: (w: number, h: number) => void;
   onIconify?: () => void;
+  onEnvironment?: () => void;
   onClose?: () => void;
   onMouseDown?: () => void;
   onContextMenu?: (e: MouseEvent) => void;
@@ -77,6 +78,20 @@ export function Frame(props: {
           <span class="absolute top-[3px] left-[3px] size-1.5 bg-white" />
         </span>
         <span class="min-w-0 flex-1 overflow-hidden whitespace-nowrap">{props.title}</span>
+        <Show when={props.onEnvironment}>
+          <button
+            type="button"
+            class="shrink-0 border border-white px-0.5 text-[10px] leading-none text-white"
+            title="Environment"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onEnvironment?.();
+            }}
+          >
+            env
+          </button>
+        </Show>
         <Show when={props.onIconify}>
           <button
             type="button"

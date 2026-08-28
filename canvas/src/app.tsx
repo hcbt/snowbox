@@ -169,6 +169,7 @@ export function App() {
         raise={raise}
         run={run}
         save={() => save(layout())}
+        onEnvironment={(id) => setOverlay({ kind: "environment", id, ...placeOverlay() })}
       />
       <Show when={menu()}>
         {(hit) => (
@@ -314,6 +315,7 @@ function CanvasWindows(props: {
   raise: (id: string) => void;
   run: (fn: () => Promise<void>) => Promise<boolean>;
   save: () => void;
+  onEnvironment: (id: string) => void;
 }) {
   return (
     <For each={props.layout.windows} keyed={(w) => w.id}>
@@ -338,6 +340,7 @@ function CanvasWindows(props: {
             onMoveEnd={props.save}
             onResize={(nw, nh) => props.patchWin(w().id, { w: nw, h: nh })}
             onIconify={() => props.patchWin(w().id, { iconified: true }, true)}
+            onEnvironment={() => props.onEnvironment(w().sandbox)}
           >
             <Show
               when={props.live(w().sandbox)}
@@ -446,9 +449,12 @@ function AppMenu(props: {
         const box = sb();
         if (box) props.setOverlay({ kind: "limits", id: box.id, ...at });
       }}
-      onHatch={() => {
+      onEnvironment={() => {
         const box = sb();
-        if (box) props.setOverlay({ kind: "hatch", id: box.id, ...at });
+        if (box) props.setOverlay({ kind: "environment", id: box.id, ...at });
+      }}
+      onTemplates={() => {
+        props.setOverlay({ kind: "templates", ...at });
       }}
       onPublish={() => {
         const box = sb();

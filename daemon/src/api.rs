@@ -45,6 +45,7 @@ pub struct CreateBody {
     #[serde(default)]
     pub limits: LimitsPatch,
     pub template: Option<String>,
+    pub environment: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -96,6 +97,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sandboxes/{id}/copy-out", post(copy_out))
         .route("/agent-options", get(agent_options))
         .route("/templates", get(list_templates).post(save_template))
+        .route("/templates/{name}", get(get_template).put(put_template))
         .route(
             "/sandboxes/{id}/publish",
             get(list_publish).post(publish_port),
@@ -142,6 +144,11 @@ async fn create(
         .store
         .create_with(body.name, limits, template.as_deref())
         .map_err(map_err)?;
+    if let Some(environment) = body.environment {
+        let dir = state.store.dir(sandbox.id);
+        crate::environment::set_document(&dir, &environment).map_err(map_err)?;
+        crate::environment::snapshot_create(&dir).map_err(map_err)?;
+    }
     Ok((
         StatusCode::CREATED,
         Json(serde_json::to_value(sandbox).expect("sandbox json")),
@@ -344,6 +351,23 @@ async fn save_template(
     ))
 }
 
+async fn get_template(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let cfg = state.templates.config(&name).map_err(map_err)?;
+    Ok(Json(cfg))
+}
+
+async fn put_template(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let cfg = state.templates.set_config(&name, &body).map_err(map_err)?;
+    Ok(Json(cfg))
+}
+
 async fn agent_options() -> Json<serde_json::Value> {
     Json(serde_json::from_str(crate::environment::SCHEMA).expect("schema json"))
 }
@@ -353,7 +377,7 @@ async fn get_environment(
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let _ = state.store.get(id).map_err(map_err)?;
-    let cfg = crate::environment::config(&state.store.dir(id)).map_err(map_err)?;
+    let cfg = crate::environment::document(&state.store.dir(id)).map_err(map_err)?;
     Ok(Json(cfg))
 }
 
@@ -363,16 +387,21 @@ async fn put_environment(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let sandbox = state.store.get(id).map_err(map_err)?;
-    let cfg = crate::environment::set_config(&state.store.dir(id), &body).map_err(map_err)?;
+    let dir = state.store.dir(id);
+    let cfg = crate::environment::set_document(&dir, &body).map_err(map_err)?;
     if sandbox.state == SandboxState::Running {
         if let Some(vmm) = state.vmm.clone() {
             let store = state.store.clone();
             let cache = state.cache.clone();
-            tokio::task::spawn_blocking(move || apply_env(&store, &cache, &vmm, id))
-                .await
-                .map_err(|_| ActionError::Internal)
-                .and_then(|r| r)
-                .map_err(map_err)?;
+            let home = dir.join("home");
+            tokio::task::spawn_blocking(move || {
+                apply_env(&store, &cache, &vmm, id)?;
+                crate::agent::tar_in(&vmm, id, "/home/snow", &home).map_err(ActionError::Failed)
+            })
+            .await
+            .map_err(|_| ActionError::Internal)
+            .and_then(|r| r)
+            .map_err(map_err)?;
         }
     }
     Ok(Json(cfg))
@@ -957,6 +986,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_environment_is_the_reset_snapshot() {
+        let (_dir, state) = harness();
+        let make = || router(state.clone());
+        let (status, created) = send(
+            make(),
+            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"environment":{"programs":{"claude-code":{"enable":true},"codex":{"enable":false},"pi-coding-agent":{"enable":false}}}}"#,
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = created["id"].as_str().unwrap();
+        let url = format!("http://127.0.0.1/api/v1/sandboxes/{id}/environment");
+        let (status, patched) = send(
+            make(),
+            authed(Request::put(&url))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"programs":{"claude-code":{"enable":false},"codex":{"enable":true},"pi-coding-agent":{"enable":false}}}"#,
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(patched["programs"]["codex"]["enable"], true);
+        let (status, _) = send(
+            make(),
+            authed(Request::post(format!(
+                "http://127.0.0.1/api/v1/sandboxes/{id}/reset"
+            )))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, listed) = send(
+            make(),
+            authed(Request::get(&url)).body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed["programs"]["claude-code"]["enable"], true);
+        assert_eq!(listed["programs"]["codex"]["enable"], false);
+    }
+
+    #[tokio::test]
     async fn templates_ship_empty() {
         let (_dir, state) = harness();
         let make = || router(state.clone());
@@ -1128,7 +1206,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CREATED);
         let id = created["id"].as_str().unwrap();
-        assert_eq!(created["home"][0], ".gitconfig");
+        assert!(created["home"].as_array().unwrap().is_empty());
 
         let src = dir.path().join("proj");
         std::fs::create_dir(&src).unwrap();

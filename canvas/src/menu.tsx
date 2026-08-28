@@ -24,7 +24,8 @@ export function RootMenu(props: {
   onReset: () => void;
   onToggleIcons: () => void;
   onLimits: () => void;
-  onHatch: () => void;
+  onEnvironment: () => void;
+  onTemplates: () => void;
   onPublish: () => void;
   onCopy: (dir: "in" | "out") => void;
   close: () => void;
@@ -89,8 +90,11 @@ export function RootMenu(props: {
       <button type="button" class={item} disabled={!sb()} onClick={() => go(props.onLimits)}>
         Limits of {sbName()}…
       </button>
-      <button type="button" class={item} disabled={!sb()} onClick={() => go(props.onHatch)}>
-        Hatch {sbName()}…
+      <button type="button" class={item} disabled={!sb()} onClick={() => go(props.onEnvironment)}>
+        Environment of {sbName()}…
+      </button>
+      <button type="button" class={item} onClick={() => go(props.onTemplates)}>
+        Templates…
       </button>
       <button
         type="button"

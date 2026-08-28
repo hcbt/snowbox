@@ -31,10 +31,13 @@ export type AgentProgram = {
 export type EnvProgram = {
   enable?: boolean;
   settings?: JsonObject;
+  extraPackages?: string[];
+  configDir?: string;
 };
 
 export type EnvironmentDoc = {
   programs?: { [name: string]: EnvProgram };
+  env?: JsonObject;
 };
 
 export type WindowRec = {
@@ -124,23 +127,33 @@ export async function empty(path: string, init?: RequestInit): Promise<void> {
   await failIfNotOk(r);
 }
 
-function createSandboxBody(name?: string, template?: string) {
+function createSandboxBody(name?: string, template?: string, environment?: EnvironmentDoc) {
+  if (name && template && environment) return { name, template, environment };
   if (name && template) return { name, template };
+  if (name && environment) return { name, environment };
+  if (template && environment) return { template, environment };
   if (name) return { name };
   if (template) return { template };
+  if (environment) return { environment };
   return {};
 }
 
 export const api = {
   sandboxes: () => json<{ sandboxes: Sandbox[] }>("/api/v1/sandboxes"),
-  create: (name?: string, template?: string) => {
-    const body = createSandboxBody(name, template);
+  create: (name?: string, template?: string, environment?: EnvironmentDoc) => {
+    const body = createSandboxBody(name, template, environment);
     return json<Sandbox>("/api/v1/sandboxes", {
       method: "POST",
       body: JSON.stringify(body),
     });
   },
   templates: () => json<{ templates: Template[] }>("/api/v1/templates"),
+  template: (name: string) => json<EnvironmentDoc>(`/api/v1/templates/${name}`),
+  saveTemplateConfig: (name: string, config: EnvironmentDoc) =>
+    json<EnvironmentDoc>(`/api/v1/templates/${name}`, {
+      method: "PUT",
+      body: JSON.stringify(config),
+    }),
   saveTemplate: (name: string, sandbox: string) =>
     json<Template>("/api/v1/templates", {
       method: "POST",

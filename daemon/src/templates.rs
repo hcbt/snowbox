@@ -76,6 +76,35 @@ impl Library {
             shipped: false,
         })
     }
+
+    pub fn config(&self, name: &str) -> Result<serde_json::Value, ActionError> {
+        let dir = self.resolve(name)?;
+        let raw = fs::read_to_string(dir.join("config.json")).map_err(|_| ActionError::Internal)?;
+        serde_json::from_str(&raw).map_err(|_| ActionError::Internal)
+    }
+
+    pub fn set_config(
+        &self,
+        name: &str,
+        value: &serde_json::Value,
+    ) -> Result<serde_json::Value, ActionError> {
+        if !valid_name(name) {
+            return Err(ActionError::BadRequest("invalid template name"));
+        }
+        if self.shipped.join(name).join("flake.nix").is_file() {
+            return Err(ActionError::Conflict("shipped template"));
+        }
+        let dest = self.user.join(name);
+        if !dest.join("flake.nix").is_file() {
+            return Err(ActionError::NotFound);
+        }
+        if !value.is_object() {
+            return Err(ActionError::BadRequest("config must be an object"));
+        }
+        let raw = serde_json::to_string_pretty(value).map_err(|_| ActionError::Internal)?;
+        fs::write(dest.join("config.json"), raw).map_err(|_| ActionError::Internal)?;
+        self.config(name)
+    }
 }
 
 pub fn valid_name(name: &str) -> bool {
@@ -137,5 +166,36 @@ mod tests {
             .save("empty", &src.path().join("environment"))
             .unwrap_err();
         assert!(matches!(err, ActionError::Conflict(_)));
+    }
+
+    #[test]
+    fn set_config_refuses_shipped_and_updates_user() {
+        let dir = tempfile::tempdir().unwrap();
+        let shipped = dir.path().join("shipped/empty");
+        fs::create_dir_all(&shipped).unwrap();
+        fs::write(shipped.join("flake.nix"), "{}").unwrap();
+        fs::write(shipped.join("config.json"), "{}").unwrap();
+        let lib = Library {
+            shipped: dir.path().join("shipped"),
+            user: dir.path().join("user"),
+        };
+        let src = tempfile::tempdir().unwrap();
+        environment::write_default(src.path()).unwrap();
+        lib.save("work", &src.path().join("environment")).unwrap();
+        let err = lib
+            .set_config("empty", &serde_json::json!({"programs":{}}))
+            .unwrap_err();
+        assert!(matches!(err, ActionError::Conflict(_)));
+        let next = lib
+            .set_config(
+                "work",
+                &serde_json::json!({"programs":{"claude-code":{"enable":true}}}),
+            )
+            .unwrap();
+        assert_eq!(next["programs"]["claude-code"]["enable"], true);
+        assert_eq!(
+            lib.config("work").unwrap()["programs"]["claude-code"]["enable"],
+            true
+        );
     }
 }

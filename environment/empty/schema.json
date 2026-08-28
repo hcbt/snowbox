@@ -51,6 +51,18 @@
           "type": "json",
           "default": {},
           "description": "JSON written to ~/.pi/agent/settings.json. Not for secrets."
+        },
+        {
+          "name": "configDir",
+          "type": "string",
+          "default": "",
+          "description": "Directory holding Pi configuration, a path inside the Sandbox."
+        },
+        {
+          "name": "extraPackages",
+          "type": "packages",
+          "default": ["nodejs", "bun"],
+          "description": "Extra packages on PATH for Pi."
         }
       ]
     }

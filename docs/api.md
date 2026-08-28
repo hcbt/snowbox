@@ -16,31 +16,33 @@ The token is a file in the Host config directory (`snowbox/token` under `dirs::c
 
 ## Sandboxes
 
-Each Sandbox has a disk the Daemon owns on the Host (under the data directory, `snowbox/sandboxes/{id}`). That disk holds Workspace (`/workspace`), Home (allowlist), a system tree, and the Environment flake (a Host document, never `/workspace`). Start restores a saved machine state when one exists for that disk. A New Sandbox restores a pre-booted snapshot of the guest runtime (the Daemon warms that snapshot in the background from `.warm` if it is missing). Stop writes machine state for that Sandbox; it does not refresh `.ready`. The guest root is a clone of the runtime disk; Workspace and Home are synced over vsock, not a Host mount. Quit the Daemon: running guests are saved then stopped; disks, machine state, and Layout stay. Destroy is the only verb that deletes the Workspace.
+Each Sandbox has a disk the Daemon owns on the Host (under the data directory, `snowbox/sandboxes/{id}`). That disk holds Workspace (`/workspace`), the Linux home directory, a system tree, and the Environment flake (a Host document, never `/workspace`). Start restores a saved machine state when one exists for that disk. A New Sandbox restores a pre-booted snapshot of the guest runtime (the Daemon warms that snapshot in the background from `.warm` if it is missing). Stop writes machine state for that Sandbox; it does not refresh `.ready`. The guest root is a clone of the runtime disk; Workspace and Linux home are synced over vsock, not a Host mount. Quit the Daemon: running guests are saved then stopped; disks, machine state, and Layout stay. Destroy is the only verb that deletes the Workspace.
 
 Many Sandboxes may run at once. They share Host CPU, RAM, and disk capacity, not a filesystem and not a network: each guest has its own disk and its own NAT. The allowed exception is the Cache (Host-side; the Daemon writes, guests copy).
 
 The Cache is a Snowbox store under the data directory (`snowbox/cache`), a `file://` substituter the Daemon writes. Guests copy from it; they do not share `/nix/store` with the Host.
 
-JSON `state` is `stopped` or `running`. `home` is the allowlist of paths under the guest home that survive Reset. v1 default: `.gitconfig`. `limits` are per-Sandbox CPU count, RAM bytes, and disk bytes. Defaults: 2 CPUs, 2 GiB RAM, 16 GiB disk. Set at create; PATCH later. CPU and RAM take effect at start. Disk is the guest root image size on the Host; growing applies at start, shrinking needs Reset first.
+JSON `state` is `stopped` or `running`. `home` is always `[]` (Reset wipes the Linux home; there is no keep-list). `limits` are per-Sandbox CPU count, RAM bytes, and disk bytes. Defaults: 2 CPUs, 2 GiB RAM, 16 GiB disk. Set at create; PATCH later. CPU and RAM take effect at start. Disk is the guest root image size on the Host; growing applies at start, shrinking needs Reset first.
 
 Copy-in and copy-out run only while `stopped` (`409` `sandbox is running` otherwise). Non-empty destination without `"replace": true` → `409` `replace required`. No merge. A directory source is copied as the contents of `/workspace`; a file lands as `/workspace/{filename}`. `from` and `to` are absolute Host paths (`.`/`..` resolved). copy-out `to` cannot be `/`, `/Users`, `/home`, the home directory root, `/etc`, `/nix/store`, or the Snowbox data directory.
 
-Reset restores the system (drops the writable guest disk so the next start is a fresh root), keeps Workspace, keeps the Environment flake, and keeps only allowlisted Home paths. If the Sandbox is running, Stop (sync Workspace, write machine state) runs first, then Reset.
+Reset puts the Sandbox back to Create: restores the Environment as it was at Create (not the Template as it exists now), wipes the Linux home, keeps Workspace, drops the writable guest disk so the next start is a fresh root. If the Sandbox is running, Stop (sync Workspace, write machine state) runs first, then Reset.
 
 | Method | Path | Meaning |
 | --- | --- | --- |
 | `GET` | `/health` | `{"ok":true}` |
 | `GET` | `/sandboxes` | List |
-| `POST` | `/sandboxes` | Create. Body `{"name": "...", "limits": {...}, "template": "empty"}` — all optional. `template` is a Template name. `201` |
+| `POST` | `/sandboxes` | Create. Body `{"name": "...", "limits": {...}, "template": "empty", "environment": {...}}` — all optional. `template` is a Template name. `environment` is optional `config.json` (Customize at Create). `201` |
 | `GET` | `/templates` | Shipped and saved Templates. |
-| `POST` | `/templates` | Save the current Environment as a Template. Body `{"name":"work","sandbox":"<id>"}`. `201`. Cannot overwrite a shipped Template. |
-| `GET` | `/agent-options` | home-manager Agent option schema the hatch renders. |
+| `POST` | `/templates` | Save the current Environment as a Template. Body `{"name":"work","sandbox":"<id>"}`. `201`. Cannot overwrite a shipped Template. Overwrites a user-saved name. |
+| `GET` | `/templates/{name}` | That Template’s `config.json`. `404` if missing. |
+| `PUT` | `/templates/{name}` | Replace that Template’s `config.json`. Cannot overwrite a shipped Template. |
+| `GET` | `/agent-options` | home-manager Agent option schema the Environment form renders. |
 | `GET` | `/sandboxes/{id}` | One record. `404` if missing |
 | `PATCH` | `/sandboxes/{id}` | Update Limits. Body `{"limits":{"cpu":4,"ram":4294967296,"disk":34359738368}}` — any field optional. Applied on the next start. `404` if missing |
 | `POST` | `/sandboxes/{id}/start` | `stopped` → `running`. Restores machine state when present, otherwise boots. `409` if already running. No hypervisor → `503` `failed` |
 | `POST` | `/sandboxes/{id}/stop` | `running` → `stopped`. Syncs Workspace to the Host, then writes machine state; disk kept. Workspace sync failure → Stop fails and the Sandbox stays running. `409` if already stopped. No hypervisor → `503` `failed` |
-| `POST` | `/sandboxes/{id}/reset` | Keep Workspace + Home allowlist; restore system. Running: halt (Workspace sync + save) first. `404` if missing |
+| `POST` | `/sandboxes/{id}/reset` | Rewind Environment to Create, wipe Linux home, keep Workspace. Running: halt (Workspace sync + save) first. `404` if missing |
 | `POST` | `/sandboxes/{id}/copy-in` | Body `{"from":"/host/path","replace":false}` |
 | `POST` | `/sandboxes/{id}/copy-out` | Body `{"to":"/host/path","replace":false}` |
 | `GET` | `/sandboxes/{id}/environment` | Current home-manager Agent config (`config.json`). |
@@ -68,7 +70,7 @@ Sandbox object:
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "name": "work",
   "state": "stopped",
-  "home": [".gitconfig"],
+  "home": [],
   "limits": { "cpu": 2, "ram": 2147483648, "disk": 17179869184 }
 }
 ```

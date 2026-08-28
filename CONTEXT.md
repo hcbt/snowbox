@@ -19,11 +19,11 @@ The project files stored on a Sandbox’s own disk at `/workspace`. Exactly one 
 _Avoid_: mount, share, project folder, repo (when you mean the Workspace as a whole)
 
 **Home**:
-An allowlist of paths that survive Reset. v1: `.gitconfig` and Secrets Snowbox placed. Vendor Agent auth dirs are added when that Agent is first-class in a Template. Not the Unix home directory. `~/.local`, `~/.npm`, `~/.cargo`, `~/.config` as a blob, and other install prefixes are not Home.
-_Avoid_: profile, state, volume, $HOME
+The Linux user home inside the Sandbox. Stop keeps it on disk. Reset wipes it (logins, extra files, `.gitconfig`). There is no keep-list of paths that survive Reset.
+_Avoid_: profile, state, volume, allowlist, $HOME
 
 **Agent**:
-A command that runs *inside* a Sandbox and drives coding work. First-class Agents are the home-manager `programs.*` modules the hatch exposes. Snowbox may start zero or one such command; anything else you run in the shell is just a process. Subprocesses run in the Sandbox userspace; no Docker/Podman-in-Sandbox. Starts unprivileged with passwordless sudo. Isolation is Host-vs-Sandbox, not user-vs-root inside the Sandbox.
+A command that runs *inside* a Sandbox and drives coding work. First-class Agents are the home-manager `programs.*` modules the Environment overlay exposes. Snowbox may start zero or one such command; anything else you run in the shell is just a process. Subprocesses run in the Sandbox userspace; no Docker/Podman-in-Sandbox. Starts unprivileged with passwordless sudo. Isolation is Host-vs-Sandbox, not user-vs-root inside the Sandbox.
 _Avoid_: bot, assistant, LLM, model (as product nouns)
 
 **Daemon**:
@@ -35,19 +35,19 @@ A Snowbox-managed store on the Host of Environment closures already fetched. Sep
 _Avoid_: /nix/store, substituter, binary cache, shared store, mount
 
 **Template**:
-A named starting Environment: devenv plus a home-manager Agent configuration. It is not a running Sandbox and not a Package list. Snowbox ships a devenv-only default; the hatch authors the rest. “Flake” is not a GUI noun.
+A named starting Environment: devenv plus a home-manager Agent configuration. It is not a running Sandbox and not a Package list. Snowbox ships a devenv-only default; you author the rest in the Canvas and may save a Sandbox’s Environment as a Template for later New Sandboxes. Saving a Template does not change Sandboxes that already exist. “Flake” is not a GUI noun.
 _Avoid_: image, stack, preset, distro, profile, flake, package set
 
 **Environment**:
-The Sandbox’s current declared Agent configuration and devenv. It lives on the Host, owned by Snowbox. The Daemon realizes it into the Cache, then activates it in the Sandbox. The Agent cannot persist that declaration. A devenv in `/workspace` is the *project’s*, not the Environment. Reset restores this declaration, not the original Template, and keeps Workspace and Home.
-_Avoid_: image, profile, closure, disk, project flake, package set
+The Sandbox’s current declared Agent configuration and devenv. It lives on the Host, owned by Snowbox. The Daemon realizes it into the Cache, then activates it in the Sandbox. The Agent cannot persist that declaration. A devenv in `/workspace` is the *project’s*, not the Environment. Reset replaces this with the Environment as it was at Create (not the Template as it exists now) and keeps Workspace.
+_Avoid_: image, profile, closure, disk, project flake, package set, hatch
 
 **Reset**:
-The operation that makes the Environment true again. Declared Agents and devenv are realized; undeclared tools are gone; Workspace and Home remain.
-_Avoid_: rebuild, reboot, reimage, factory reset
+Put this Sandbox back to Create: the Environment from that moment (not the Template as it exists now), empty Linux home, same Workspace. Extra installs and logins are gone. Destroy is what deletes the Workspace.
+_Avoid_: rebuild, reboot, reimage, factory reset, destroy
 
 **Stop**:
-Write the Sandbox’s machine state and keep its disk: Workspace, Home, Environment, and running processes. Start restores that state onto the same disk. A New Sandbox restores a guest that has already booted (the Daemon keeps one such snapshot and boots it once if missing). If restore is impossible, Start boots.
+Write the Sandbox’s machine state and keep its disk: Workspace, Linux home, Environment, and running processes. Start restores that state onto the same disk. A New Sandbox restores a guest that has already booted (the Daemon keeps one such snapshot and boots it once if missing). If restore is impossible, Start boots.
 _Avoid_: pause, freeze, suspend (as GUI nouns)
 
 **Destroy**:
@@ -67,11 +67,11 @@ Per-Sandbox CPU, RAM, and disk caps, set in the UI at create and editable later.
 _Avoid_: quota, cgroup, resources (when you mean this)
 
 **Canvas**:
-The Host browser UI. One surface: Sandboxes are Windows on it. The hatch, Templates, Limits, copy-in/out, and Publish are overlays on that surface, not other home screens. There is no Package catalog.
-_Avoid_: dashboard, lobby, desktop, IDE, workspace (that is files)
+The Host browser UI. One surface: Sandboxes are Windows on it. Agent configuration, Templates, Limits, copy-in/out, and Publish are overlays on that surface, not other home screens. There is no Package catalog.
+_Avoid_: dashboard, lobby, desktop, IDE, workspace (that is files), hatch
 
 **Window**:
-A Snowbox-owned terminal attached to one Sandbox, a free-floating rectangle on the Canvas. A Sandbox may have several. Opening one starts a shell in that Sandbox; closing it ends that shell, not the Sandbox. Not an Agent.
+A Snowbox-owned terminal attached to one Sandbox, a free-floating rectangle on the Canvas. A Sandbox may have several. Opening one starts a shell in that Sandbox; closing it ends that shell, not the Sandbox. A control on the Window frame opens that Sandbox’s Environment form. Not an Agent.
 _Avoid_: pane, tab, session, tmux, xterm, PTY (as a GUI noun)
 
 **Layout**:

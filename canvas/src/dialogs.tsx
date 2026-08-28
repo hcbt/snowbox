@@ -26,8 +26,10 @@ function overlayTitle(ov: Overlay, sandboxName: string): string {
       return "Sandboxes";
     case "limits":
       return `Limits — ${sandboxName}`;
-    case "hatch":
-      return `Hatch — ${sandboxName}`;
+    case "environment":
+      return `Environment — ${sandboxName}`;
+    case "templates":
+      return "Templates";
     case "save-template":
       return `Save ${sandboxName} as Template`;
     case "publish":
@@ -50,6 +52,18 @@ function parseSettings(text: string): JsonObject | undefined {
   } catch {
     return undefined;
   }
+}
+
+function environmentBody(
+  doc: EnvironmentDoc,
+  cfg: { [name: string]: EnvProgram },
+  envText: string,
+): EnvironmentDoc {
+  const env = parseSettings(envText || "{}");
+  const out: EnvironmentDoc = { ...doc, programs: cfg };
+  if (env && Object.keys(env).length > 0) out.env = env;
+  else delete out.env;
+  return out;
 }
 
 export function OverlayDialog(props: {
@@ -79,6 +93,9 @@ export function OverlayDialog(props: {
   const [hostPort, setHostPort] = createSignal("");
   const [published, setPublished] = createSignal<Published[]>([]);
   const [replace, setReplace] = createSignal(false);
+  const [customize, setCustomize] = createSignal(false);
+  const [envVars, setEnvVars] = createSignal("");
+  const [tplName, setTplName] = createSignal("");
 
   onSettled(() => {
     loadOverlay(props.overlay, props.sandbox, {
@@ -87,6 +104,7 @@ export function OverlayDialog(props: {
       setAgents,
       setEnvDoc,
       setEnvCfg,
+      setEnvVars,
     });
   });
 
@@ -105,6 +123,9 @@ export function OverlayDialog(props: {
       replace: replace(),
       envDoc: envDoc(),
       envCfg: envCfg(),
+      envVars: envVars(),
+      customize: customize(),
+      tplName: tplName(),
       setPublished,
     });
 
@@ -152,6 +173,12 @@ export function OverlayDialog(props: {
           agents={agents()}
           envCfg={envCfg()}
           setEnvCfg={setEnvCfg}
+          envVars={envVars()}
+          setEnvVars={setEnvVars}
+          customize={customize()}
+          setCustomize={setCustomize}
+          tplName={tplName()}
+          setTplName={setTplName}
           pickSandbox={props.pickSandbox}
           run={props.run}
         />
@@ -192,9 +219,14 @@ function loadOverlay(
     setAgents: (a: AgentProgram[]) => void;
     setEnvDoc: (d: EnvironmentDoc) => void;
     setEnvCfg: (c: { [name: string]: EnvProgram }) => void;
+    setEnvVars: (v: string) => void;
   },
 ): void {
-  if (overlay.kind === "sandbox" || overlay.kind === "save-template") {
+  if (
+    overlay.kind === "sandbox" ||
+    overlay.kind === "save-template" ||
+    overlay.kind === "templates"
+  ) {
     api
       .templates()
       .then((r) => set.setTemplates(r.templates))
@@ -206,15 +238,26 @@ function loadOverlay(
       .then((r) => set.setPublished(r.published))
       .catch(() => {});
   }
-  if (overlay.kind !== "hatch" || !sandbox) return;
-  const id = sandbox.id;
-  Promise.all([api.agentOptions(), api.environment(id)])
-    .then(([opts, cfg]) => {
-      set.setAgents(opts.programs);
-      set.setEnvDoc(cfg);
-      set.setEnvCfg(cfg.programs ?? {});
-    })
-    .catch(() => {});
+  if (
+    overlay.kind === "sandbox" ||
+    overlay.kind === "templates" ||
+    overlay.kind === "environment"
+  ) {
+    api
+      .agentOptions()
+      .then((opts) => set.setAgents(opts.programs))
+      .catch(() => {});
+  }
+  if (overlay.kind === "environment" && sandbox) {
+    api
+      .environment(sandbox.id)
+      .then((cfg) => {
+        set.setEnvDoc(cfg);
+        set.setEnvCfg(cfg.programs ?? {});
+        set.setEnvVars(JSON.stringify(cfg.env ?? {}, null, 2));
+      })
+      .catch(() => {});
+  }
 }
 
 async function submitOverlay(
@@ -236,6 +279,9 @@ async function submitOverlay(
     replace: boolean;
     envDoc: EnvironmentDoc;
     envCfg: { [name: string]: EnvProgram };
+    envVars: string;
+    customize: boolean;
+    tplName: string;
     setPublished: (p: Published[]) => void;
   },
 ): Promise<void> {
@@ -249,10 +295,23 @@ async function submitOverlay(
   let ok = false;
   if (ov.kind === "sandbox") {
     ok = await props.run(async () => {
-      const sb = await api.create(form.name || undefined, form.tpl || undefined);
+      const env = form.customize
+        ? environmentBody(form.envDoc, form.envCfg, form.envVars)
+        : undefined;
+      const sb = await api.create(form.name || undefined, form.tpl || undefined, env);
       await api.start(sb.id);
       await api.openWindow(sb.id);
     });
+  } else if (ov.kind === "templates") {
+    if (!form.tplName.trim()) return;
+    ok = await props.run(() =>
+      api
+        .saveTemplateConfig(
+          form.tplName.trim(),
+          environmentBody(form.envDoc, form.envCfg, form.envVars),
+        )
+        .then(() => undefined),
+    );
   } else if (ov.kind === "save-template") {
     ok = await props.run(() => api.saveTemplate(form.name.trim(), ov.id).then(() => undefined));
   } else if (ov.kind === "publish") {
@@ -276,11 +335,13 @@ async function submitOverlay(
         })
         .then(() => undefined),
     );
-  } else if (ov.kind === "hatch") {
+  } else if (ov.kind === "environment") {
     const running = props.sandbox?.state === "running";
     ok = await props.run(
       () =>
-        api.saveEnvironment(ov.id, { ...form.envDoc, programs: form.envCfg }).then(() => undefined),
+        api
+          .saveEnvironment(ov.id, environmentBody(form.envDoc, form.envCfg, form.envVars))
+          .then(() => undefined),
       running ? "" : "applies on Start",
     );
   } else if (ov.kind === "copy") {
@@ -324,6 +385,12 @@ function OverlayFields(props: {
   agents: AgentProgram[];
   envCfg: { [name: string]: EnvProgram };
   setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
+  envVars: string;
+  setEnvVars: (v: string) => void;
+  customize: boolean;
+  setCustomize: (v: boolean) => void;
+  tplName: string;
+  setTplName: (v: string) => void;
   pickSandbox: (id: string) => void;
   run: (fn: () => Promise<void>, done?: string) => Promise<boolean>;
 }) {
@@ -340,8 +407,8 @@ function OverlayFields(props: {
       </Show>
       <Show when={ov().kind === "reset"}>
         <p class="text-[13px]">
-          Reset {props.sandboxName}? Declared Agents and devenv stay. Undeclared tools are gone.
-          Workspace and Home remain.
+          Reset {props.sandboxName}? Puts this Sandbox back to Create. The project stays. Linux home
+          (logins, extra files) is wiped. The form goes back to how it was at Create.
         </p>
       </Show>
       <Show when={ov().kind === "sandbox"}>
@@ -351,6 +418,13 @@ function OverlayFields(props: {
           tpl={props.tpl}
           setTpl={props.setTpl}
           templates={props.templates}
+          customize={props.customize}
+          setCustomize={props.setCustomize}
+          agents={props.agents}
+          envCfg={props.envCfg}
+          setEnvCfg={props.setEnvCfg}
+          envVars={props.envVars}
+          setEnvVars={props.setEnvVars}
         />
       </Show>
       <Show when={ov().kind === "save-template"}>
@@ -384,8 +458,27 @@ function OverlayFields(props: {
           setDisk={props.setDisk}
         />
       </Show>
-      <Show when={ov().kind === "hatch"}>
-        <HatchFields agents={props.agents} envCfg={props.envCfg} setEnvCfg={props.setEnvCfg} />
+      <Show when={ov().kind === "environment"}>
+        <EnvironmentFields
+          agents={props.agents}
+          envCfg={props.envCfg}
+          setEnvCfg={props.setEnvCfg}
+          envVars={props.envVars}
+          setEnvVars={props.setEnvVars}
+          secrets
+        />
+      </Show>
+      <Show when={ov().kind === "templates"}>
+        <TemplatesFields
+          templates={props.templates}
+          tplName={props.tplName}
+          setTplName={props.setTplName}
+          agents={props.agents}
+          envCfg={props.envCfg}
+          setEnvCfg={props.setEnvCfg}
+          envVars={props.envVars}
+          setEnvVars={props.setEnvVars}
+        />
       </Show>
       <Show when={ov().kind === "copy"}>
         <label class={label}>
@@ -438,6 +531,13 @@ function NewSandboxFields(props: {
   tpl: string;
   setTpl: (v: string) => void;
   templates: Template[];
+  customize: boolean;
+  setCustomize: (v: boolean) => void;
+  agents: AgentProgram[];
+  envCfg: { [name: string]: EnvProgram };
+  setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
+  envVars: string;
+  setEnvVars: (v: string) => void;
 }) {
   return (
     <>
@@ -467,6 +567,24 @@ function NewSandboxFields(props: {
           </For>
         </select>
       </label>
+      <label class="mt-2 flex items-center gap-2 font-bold">
+        <input
+          type="checkbox"
+          checked={props.customize}
+          onChange={(e) => props.setCustomize(e.currentTarget.checked)}
+        />
+        Customize
+      </label>
+      <Show when={props.customize}>
+        <EnvironmentFields
+          agents={props.agents}
+          envCfg={props.envCfg}
+          setEnvCfg={props.setEnvCfg}
+          envVars={props.envVars}
+          setEnvVars={props.setEnvVars}
+          secrets
+        />
+      </Show>
     </>
   );
 }
@@ -564,14 +682,19 @@ function LimitsFields(props: {
   );
 }
 
-function HatchFields(props: {
+function EnvironmentFields(props: {
   agents: AgentProgram[];
   envCfg: { [name: string]: EnvProgram };
   setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
+  envVars: string;
+  setEnvVars: (v: string) => void;
+  secrets: boolean;
 }) {
   return (
     <>
-      <p class="text-[12px]">devenv is always in the Environment. Secrets stay out of the flake.</p>
+      <p class="text-[12px]">
+        devenv is always in the Environment. Keys are not stored in the recipe.
+      </p>
       <For
         each={props.agents}
         keyed={(p) => p.name}
@@ -582,6 +705,8 @@ function HatchFields(props: {
           const cur = () => props.envCfg[name] ?? {};
           const enabled = () => Boolean(cur().enable);
           const settings = () => JSON.stringify(cur().settings ?? {}, null, 2);
+          const extras = p().options.find((o) => o.name === "extraPackages");
+          const allow = extras && Array.isArray(extras.default) ? extras.default : [];
           return (
             <div class="mt-2 border-t border-neutral-300 pt-2">
               <label class="flex items-center gap-2 font-bold">
@@ -614,10 +739,121 @@ function HatchFields(props: {
                   }}
                 />
               </label>
+              <Show when={p().options.some((o) => o.name === "configDir")}>
+                <label class={label}>
+                  config dir
+                  <input
+                    class={field}
+                    value={cur().configDir ?? ""}
+                    placeholder="/home/snow/.claude"
+                    onInput={(e) => {
+                      const v = e.currentTarget.value;
+                      props.setEnvCfg({
+                        ...props.envCfg,
+                        [name]: { ...cur(), configDir: v || undefined },
+                      });
+                    }}
+                  />
+                </label>
+              </Show>
+              <Show when={allow.length > 0}>
+                <div class={`${label} mb-1`}>extra packages</div>
+                <For each={allow.filter((x): x is string => typeof x === "string")}>
+                  {(pkg) => (
+                    <label class="flex items-center gap-2 text-[12px]">
+                      <input
+                        type="checkbox"
+                        checked={(cur().extraPackages ?? []).includes(pkg())}
+                        onChange={(e) => {
+                          const on = e.currentTarget.checked;
+                          const next = new Set(cur().extraPackages ?? []);
+                          if (on) next.add(pkg());
+                          else next.delete(pkg());
+                          props.setEnvCfg({
+                            ...props.envCfg,
+                            [name]: { ...cur(), extraPackages: [...next] },
+                          });
+                        }}
+                      />
+                      {pkg()}
+                    </label>
+                  )}
+                </For>
+              </Show>
             </div>
           );
         }}
       </For>
+      <Show when={props.secrets}>
+        <label class={label}>
+          environment variables (JSON object of strings)
+          <textarea
+            class={`${field} h-20`}
+            value={props.envVars}
+            placeholder={`{\n  "ANTHROPIC_API_KEY": ""\n}`}
+            onChange={(e) => {
+              const text = e.currentTarget.value;
+              if (!parseSettings(text || "{}")) return;
+              props.setEnvVars(text);
+            }}
+          />
+        </label>
+      </Show>
+    </>
+  );
+}
+
+function TemplatesFields(props: {
+  templates: Template[];
+  tplName: string;
+  setTplName: (v: string) => void;
+  agents: AgentProgram[];
+  envCfg: { [name: string]: EnvProgram };
+  setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
+  envVars: string;
+  setEnvVars: (v: string) => void;
+}) {
+  const selected = () => props.templates.find((t) => t.name === props.tplName);
+  const userTemplates = () => props.templates.filter((t) => !t.shipped);
+  return (
+    <>
+      <p class="text-[12px]">
+        Saved Templates only. empty cannot be overwritten. Existing Sandboxes are not changed.
+      </p>
+      <label class={label}>
+        template
+        <select
+          class={`${field} bg-white text-black`}
+          value={props.tplName}
+          onChange={(e) => {
+            const name = e.currentTarget.value;
+            props.setTplName(name);
+            if (!name) return;
+            api
+              .template(name)
+              .then((cfg) => {
+                props.setEnvCfg(cfg.programs ?? {});
+                props.setEnvVars(JSON.stringify(cfg.env ?? {}, null, 2));
+              })
+              .catch(() => {});
+          }}
+        >
+          <option value="">pick a saved Template</option>
+          <For each={userTemplates()} keyed={(t) => t.name}>
+            {(t) => <option value={t().name}>{t().name}</option>}
+          </For>
+        </select>
+      </label>
+      <Show when={props.tplName && selected()}>
+        <EnvironmentFields
+          agents={props.agents}
+          envCfg={props.envCfg}
+          setEnvCfg={props.setEnvCfg}
+          envVars={props.envVars}
+          setEnvVars={props.setEnvVars}
+          secrets={false}
+        />
+      </Show>
     </>
   );
 }
