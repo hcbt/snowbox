@@ -156,6 +156,7 @@ export function OverlayDialog(props: {
   move: (x: number, y: number) => void;
   pickSandbox: (id: string) => void;
   close: () => void;
+  busy?: boolean;
   run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
 }) {
   const [name, setName] = createSignal("");
@@ -291,6 +292,7 @@ export function OverlayDialog(props: {
             <button
               type="submit"
               class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
+              disabled={props.busy}
             >
               {submitLabel(props.overlay.kind, sbName())}
             </button>
@@ -462,7 +464,9 @@ async function submitOverlay(
         : api.copyOut(ov.id, form.path, form.replace).then(() => undefined),
     );
   } else if (ov.kind === "destroy") {
-    ok = await props.run(() => api.destroy(ov.id));
+    props.close();
+    await props.run(() => api.destroy(ov.id));
+    return;
   } else if (ov.kind === "reset") {
     ok = await props.run(() => api.reset(ov.id).then(() => undefined), "", true);
   }

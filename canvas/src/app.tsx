@@ -98,20 +98,25 @@ export function App() {
   };
 
   const run = async (fn: () => Promise<void>, done = "", log = false) => {
+    if (busy()) return false;
     if (log) setLogOpen(true);
     setBusy(true);
     setStatus("");
     try {
       await fn();
-      await refresh();
-      setStatus(done);
-      return true;
     } catch (e) {
       setStatus(String(e));
-      return false;
-    } finally {
       setBusy(false);
+      return false;
     }
+    try {
+      await refresh();
+      setStatus(done);
+    } catch (e) {
+      setStatus(String(e));
+    }
+    setBusy(false);
+    return true;
   };
 
   const openMenu = (e: MouseEvent, spec: { windowId?: string; sandboxId?: string } = {}) => {
@@ -197,6 +202,7 @@ export function App() {
               setOverlay(null);
             }}
             close={() => setOverlay(null)}
+            busy={busy()}
             run={run}
           />
         )}
