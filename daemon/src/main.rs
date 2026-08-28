@@ -107,6 +107,8 @@ async fn run_daemon() -> Result<()> {
             Arc::new(Err(e))
         }
     };
+    let resume = resume::Resume::open(data.join("running.json"));
+    resume.prune(store.list().into_iter().map(|s| s.id));
     let state = api::AppState {
         token,
         store: Arc::new(store),
@@ -120,7 +122,7 @@ async fn run_daemon() -> Result<()> {
         sessions: pty::Sessions::default(),
         progress: progress::Progress::new(),
         vmm,
-        resume: Arc::new(resume::Resume::open(data.join("running.json"))),
+        resume: Arc::new(resume),
         agent_options,
     };
     let app = with_ui(api::router(state.clone()), state.clone()).layer(

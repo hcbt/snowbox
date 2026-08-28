@@ -41,6 +41,22 @@ impl Resume {
         self.persist();
     }
 
+    /// Drop IDs whose Sandboxes no longer exist. Persist if anything changed.
+    pub fn prune(&self, live: impl IntoIterator<Item = Uuid>) {
+        let live: HashSet<Uuid> = live.into_iter().collect();
+        let mut ids = self.inner.lock().expect("resume");
+        let before = ids.len();
+        ids.retain(|id| live.contains(id));
+        if ids.len() == before {
+            return;
+        }
+        if let Some(parent) = self.path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let raw = serde_json::to_string_pretty(&*ids).unwrap_or_else(|_| "[]".into());
+        let _ = fs::write(&self.path, raw);
+    }
+
     fn persist(&self) {
         let ids = self.inner.lock().expect("resume");
         if let Some(parent) = self.path.parent() {
@@ -83,5 +99,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let resume = Resume::open(dir.path().join("running.json"));
         assert!(resume.ids().is_empty());
+    }
+
+    #[test]
+    fn prune_drops_ids_that_are_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("running.json");
+        let keep = Uuid::from_u128(1);
+        let gone = Uuid::from_u128(2);
+        let resume = Resume::open(&path);
+        resume.mark(keep);
+        resume.mark(gone);
+        resume.prune([keep]);
+        drop(resume);
+
+        let resume = Resume::open(&path);
+        assert_eq!(resume.ids(), vec![keep]);
     }
 }
