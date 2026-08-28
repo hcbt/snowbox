@@ -530,7 +530,7 @@ fn boot_claimed(
         if let Err(e) = vmm.capture_ready(id, &dir) {
             log.line(format!("ready disk: capture failed ({e})"));
         } else if vmm.ready_snapshot_exists(store.root()) {
-            log.line("ready disk: ready");
+            log.line("ready snapshot: ready");
         }
     }
     if dir.join(crate::vmm::HATCHED).is_file() {

@@ -122,11 +122,10 @@ impl Hypervisor {
         self.engine.stop(id)
     }
 
-    /// Clone this Sandbox's root disk as the reusable ready image for
-    /// later New Sandboxes. Pause first so the clone is crash-consistent.
-    /// Does not copy `machine.ident` or machine state: those cannot be
-    /// shared by two running guests, and restore of `.vzvmsave` requires
-    /// the same identifier.
+    /// Pause this Sandbox, save machine state, and clone disk + save +
+    /// ident + MAC as the reusable ready image. Resume afterwards and
+    /// drop the save next to this disk so later Stop writes a fresh one.
+    /// Later New Sandboxes restore that clone instead of cold-booting.
     pub fn capture_ready(&self, id: Uuid, sandbox_dir: &Path) -> Result<(), String> {
         crate::ready::ensure(
             || snapshot_complete(&ready_dir(sandbox_dir, &self.runtime)),
@@ -139,15 +138,20 @@ impl Hypervisor {
         if snapshot_complete(&ready_dir(sandbox_dir, &self.runtime)) {
             return Ok(());
         }
-        let paused = self.engine.pause(id).is_ok();
-        bake_ready(sandbox_dir, &self.runtime);
-        if paused {
-            self.engine.resume(id)?;
+        self.engine.pause(id)?;
+        let save = sandbox_dir.join(SAVE_NAME);
+        if let Err(e) = self.engine.save(id, &save) {
+            let _ = std::fs::remove_file(&save);
+            let _ = self.engine.resume(id);
+            return Err(e);
         }
+        bake_ready(sandbox_dir, &self.runtime);
+        let _ = std::fs::remove_file(&save);
+        self.engine.resume(id)?;
         if snapshot_complete(&ready_dir(sandbox_dir, &self.runtime)) {
             Ok(())
         } else {
-            Err("ready disk: bake failed".into())
+            Err("ready snapshot: bake failed".into())
         }
     }
 
@@ -219,7 +223,11 @@ fn ready_dir(sandbox_dir: &Path, runtime: &Runtime) -> PathBuf {
 }
 
 fn snapshot_complete(dir: &Path) -> bool {
-    dir.join("root.raw").is_file() && dir.join("runtime.src").is_file()
+    dir.join("root.raw").is_file()
+        && dir.join("runtime.src").is_file()
+        && dir.join(SAVE_NAME).is_file()
+        && dir.join("machine.ident").is_file()
+        && dir.join("mac.id").is_file()
 }
 
 fn snapshot_matches_runtime(dir: &Path, runtime: &Runtime) -> bool {
@@ -261,8 +269,11 @@ fn install_ready(sandbox_dir: &Path, runtime: &Runtime) {
             return;
         }
     }
-    if ready.join("runtime.src").is_file() {
-        let _ = std::fs::copy(ready.join("runtime.src"), sandbox_dir.join("runtime.src"));
+    for name in [SAVE_NAME, "machine.ident", "mac.id", "runtime.src"] {
+        let src = ready.join(name);
+        if src.is_file() {
+            let _ = std::fs::copy(&src, sandbox_dir.join(name));
+        }
     }
     let _ = std::fs::write(sandbox_dir.join(HATCHED), b"");
 }
@@ -296,7 +307,17 @@ fn bake_ready(sandbox_dir: &Path, runtime: &Runtime) {
         let _ = std::fs::remove_dir_all(&tmp);
         return;
     }
-    let _ = std::fs::copy(sandbox_dir.join("runtime.src"), tmp.join("runtime.src"));
+    for name in [SAVE_NAME, "machine.ident", "mac.id", "runtime.src"] {
+        let src = sandbox_dir.join(name);
+        if src.is_file() {
+            let _ = std::fs::copy(&src, tmp.join(name));
+        }
+    }
+    if !snapshot_complete(&tmp) {
+        eprintln!("ready snapshot: skip bake (missing save, ident, or MAC)");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
     let _ = std::fs::remove_dir_all(&dest);
     if let Some(parent) = dest.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -402,9 +423,13 @@ mod tests {
             }
         }
 
-        fn save(&self, id: Uuid, _save: &Path) -> Result<(), String> {
+        fn save(&self, id: Uuid, save: &Path) -> Result<(), String> {
             self.saves.lock().expect("saves").push(id);
             if self.save_ok {
+                if let Some(parent) = save.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                std::fs::write(save, b"save").map_err(|e| e.to_string())?;
                 Ok(())
             } else {
                 Err("nope".into())
@@ -453,6 +478,9 @@ mod tests {
         crate::environment::write_default(&src).unwrap();
         std::fs::create_dir_all(src.join("disk")).unwrap();
         std::fs::write(src.join("disk").join("root.raw"), b"booted!!").unwrap();
+        std::fs::write(src.join(SAVE_NAME), b"save").unwrap();
+        std::fs::write(src.join("machine.ident"), b"ident").unwrap();
+        disk::write_mac_id(&src, Uuid::from_u128(99));
         stamp_runtime(&src, &rt.rootfs);
         bake_ready(&src, rt);
         src
@@ -558,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn start_clones_a_booted_disk_and_cold_boots() {
+    fn start_restores_a_clone_of_the_first_sandbox() {
         let dir = tempfile::tempdir().unwrap();
         let rt = runtime(dir.path());
         let fake = Fake::new();
@@ -573,18 +601,22 @@ mod tests {
         )
         .unwrap();
         let id = Uuid::from_u128(6);
-        assert_eq!(hv.start(id, &b, limits()).unwrap(), StartKind::Cold);
-        assert!(fake.restores.lock().unwrap().is_empty());
-        assert_eq!(*fake.boots.lock().unwrap(), vec![id]);
-        assert!(!b.join(SAVE_NAME).exists());
-        assert!(!b.join("machine.ident").exists());
+        assert_eq!(hv.start(id, &b, limits()).unwrap(), StartKind::Restored);
+        assert_eq!(*fake.restores.lock().unwrap(), vec![id]);
+        assert_eq!(
+            *fake.restore_macs.lock().unwrap(),
+            vec![Uuid::from_u128(99)]
+        );
+        assert!(fake.boots.lock().unwrap().is_empty());
+        assert!(b.join(SAVE_NAME).is_file());
+        assert_eq!(std::fs::read(b.join("machine.ident")).unwrap(), b"ident");
         assert_eq!(
             &std::fs::read(b.join("disk").join("root.raw")).unwrap()[..8],
             b"booted!!"
         );
         assert!(b.join(HATCHED).is_file());
         assert!(!b.join("environment.applied").exists());
-        assert!(ready_dir(&src, &rt).join("root.raw").is_file());
+        assert!(ready_dir(&src, &rt).join(SAVE_NAME).is_file());
     }
 
     #[test]
@@ -611,7 +643,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_ready_pauses_clones_and_resumes() {
+    fn capture_ready_saves_and_resumes() {
         let dir = tempfile::tempdir().unwrap();
         let rt = runtime(dir.path());
         let fake = Fake::new();
@@ -620,17 +652,23 @@ mod tests {
         crate::environment::write_default(&sb).unwrap();
         let id = Uuid::from_u128(11);
         hv.start(id, &sb, limits()).unwrap();
+        std::fs::write(sb.join("machine.ident"), b"ident").unwrap();
         hv.capture_ready(id, &sb).unwrap();
         assert_eq!(*fake.pauses.lock().unwrap(), vec![id]);
+        assert_eq!(*fake.saves.lock().unwrap(), vec![id]);
         assert_eq!(*fake.resumes.lock().unwrap(), vec![id]);
         assert!(ready_dir(&sb, &rt).join("root.raw").is_file());
-        assert!(!ready_dir(&sb, &rt).join(SAVE_NAME).exists());
-        assert!(!ready_dir(&sb, &rt).join("machine.ident").exists());
+        assert!(ready_dir(&sb, &rt).join(SAVE_NAME).is_file());
+        assert_eq!(
+            std::fs::read(ready_dir(&sb, &rt).join("machine.ident")).unwrap(),
+            b"ident"
+        );
+        assert!(!sb.join(SAVE_NAME).exists());
         assert!(hv.ready_snapshot_exists(dir.path()));
     }
 
     #[test]
-    fn second_hatch_reuses_the_booted_disk() {
+    fn second_hatch_restores_the_same_snapshot() {
         let dir = tempfile::tempdir().unwrap();
         let rt = runtime(dir.path());
         let fake = Fake::new();
@@ -641,20 +679,20 @@ mod tests {
         crate::environment::write_default(&b).unwrap();
         assert_eq!(
             hv.start(Uuid::from_u128(9), &b, limits()).unwrap(),
-            StartKind::Cold
+            StartKind::Restored
         );
 
         let c = dir.path().join("c");
         crate::environment::write_default(&c).unwrap();
         assert_eq!(
             hv.start(Uuid::from_u128(10), &c, limits()).unwrap(),
-            StartKind::Cold
+            StartKind::Restored
         );
         assert_eq!(
-            *fake.boots.lock().unwrap(),
+            *fake.restores.lock().unwrap(),
             vec![Uuid::from_u128(9), Uuid::from_u128(10)]
         );
-        assert!(fake.restores.lock().unwrap().is_empty());
+        assert!(fake.boots.lock().unwrap().is_empty());
         assert!(b.join(HATCHED).is_file());
         assert!(c.join(HATCHED).is_file());
         assert!(hv.ready_snapshot_exists(dir.path()));

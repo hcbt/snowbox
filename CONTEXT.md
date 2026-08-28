@@ -47,7 +47,7 @@ Put this Sandbox back to Create: the Environment from that moment (not the Templ
 _Avoid_: rebuild, reboot, reimage, factory reset, destroy
 
 **Stop**:
-Write the Sandbox’s machine state and keep its disk: Workspace, Linux home, Environment, and running processes. Start restores that state onto the same disk. A New Sandbox clones a disk that has already booted (the first Start for this guest runtime is that source; later New Sandboxes clone it and boot). If restore is impossible, Start boots.
+Write the Sandbox’s machine state and keep its disk: Workspace, Linux home, Environment, and running processes. Start restores that state onto the same disk. A New Sandbox restores a clone of the first Start’s saved machine state for this guest runtime. If restore is impossible, Start boots.
 _Avoid_: pause, freeze, suspend (as GUI nouns)
 
 **Destroy**:
