@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onSettled } from "solid-js";
+import { For, Show, createEffect, createSignal, onSettled } from "solid-js";
 import { Term } from "./term";
 import { Frame } from "./frame";
 import { RootMenu } from "./menu";
@@ -28,7 +28,6 @@ export function App() {
   const [busy, setBusy] = createSignal(false);
   const [ready, setReady] = createSignal(false);
   const [logOpen, setLogOpen] = createSignal(false);
-  const [logLines, setLogLines] = createSignal<string[]>([]);
   const [logX, setLogX] = createSignal(240);
   const [logY, setLogY] = createSignal(72);
   const [logW, setLogW] = createSignal(560);
@@ -114,19 +113,6 @@ export function App() {
       setBusy(false);
     }
   };
-
-  onSettled(() => {
-    if (!logOpen()) return;
-    const tick = () => {
-      api
-        .progress()
-        .then((r) => setLogLines(r.lines))
-        .catch(() => {});
-    };
-    tick();
-    const t = setInterval(tick, 250);
-    return () => clearInterval(t);
-  });
 
   const openMenu = (e: MouseEvent, spec: { windowId?: string; sandboxId?: string } = {}) => {
     e.preventDefault();
@@ -217,7 +203,6 @@ export function App() {
       </Show>
       <Show when={logOpen()}>
         <LogWindow
-          lines={logLines()}
           x={logX()}
           y={logY()}
           w={logW()}
@@ -239,7 +224,6 @@ export function App() {
 }
 
 function LogWindow(props: {
-  lines: string[];
   x: number;
   y: number;
   w: number;
@@ -248,10 +232,27 @@ function LogWindow(props: {
   onResize: (w: number, h: number) => void;
   onClose: () => void;
 }) {
+  const [lines, setLines] = createSignal<string[]>([]);
   onSettled(() => {
-    const el = document.querySelector("[data-log]");
-    if (el) el.scrollTop = el.scrollHeight;
+    const tick = () => {
+      api
+        .progress()
+        .then((r) => setLines(r.lines))
+        .catch((e) => {
+          setLines((cur) => (cur.length > 0 ? cur : [String(e)]));
+        });
+    };
+    tick();
+    const t = setInterval(tick, 250);
+    return () => clearInterval(t);
   });
+  createEffect(
+    () => lines(),
+    () => {
+      const el = document.querySelector("[data-log]");
+      if (el) el.scrollTop = el.scrollHeight;
+    },
+  );
   return (
     <Frame
       title="log"
@@ -268,8 +269,8 @@ function LogWindow(props: {
         data-log
         class="h-full overflow-auto bg-white p-2 font-mono text-[12px] leading-4 text-black"
       >
-        <For each={props.lines} fallback={<div class="text-neutral-500">waiting…</div>}>
-          {(line) => <div>{line()}</div>}
+        <For each={lines()} fallback={<div class="text-neutral-500">waiting…</div>}>
+          {(line) => <div>{line}</div>}
         </For>
       </div>
     </Frame>
