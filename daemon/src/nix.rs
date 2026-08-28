@@ -71,24 +71,6 @@ impl Drop for WorkDir {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn path_flake_url_pub(path: &Path) -> Result<String, ActionError> {
-    let path = path
-        .canonicalize()
-        .map_err(|e| ActionError::Failed(e.to_string()))?;
-    Ok(path_flake_url(&path))
-}
-
-#[allow(dead_code)]
-pub(crate) fn eval_string(expr: &str, origin: &str) -> Result<String, ActionError> {
-    let resp = call(&Request::EvalString {
-        expr: expr.to_string(),
-        origin: origin.to_string(),
-    })?;
-    resp.value
-        .ok_or_else(|| ActionError::Failed("snowbox-eval returned no string".into()))
-}
-
 fn path_flake_url(path: &Path) -> String {
     let raw = path.to_string_lossy();
     let mut enc = String::from("path:");

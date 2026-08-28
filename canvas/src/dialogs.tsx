@@ -3,6 +3,7 @@ import { Frame } from "./frame";
 import {
   api,
   isJsonObject,
+  type AgentOption,
   type AgentProgram,
   type EnvProgram,
   type EnvironmentDoc,
@@ -52,6 +53,21 @@ function parseSettings(text: string): JsonObject | undefined {
   } catch {
     return undefined;
   }
+}
+
+function applyTemplateDoc(
+  name: string,
+  setEnvCfg: (v: { [name: string]: EnvProgram }) => void,
+  setEnvVars: (v: string) => void,
+): void {
+  if (!name) return;
+  api
+    .template(name)
+    .then((cfg) => {
+      setEnvCfg(cfg.programs ?? {});
+      setEnvVars(JSON.stringify(cfg.env ?? {}, null, 2));
+    })
+    .catch(() => {});
 }
 
 function environmentBody(
@@ -569,7 +585,11 @@ function NewSandboxFields(props: {
         <select
           class={`${field} bg-white text-black`}
           value={props.tpl}
-          onChange={(e) => props.setTpl(e.currentTarget.value)}
+          onChange={(e) => {
+            const name = e.currentTarget.value;
+            props.setTpl(name);
+            if (props.customize) applyTemplateDoc(name, props.setEnvCfg, props.setEnvVars);
+          }}
         >
           <option value="empty">empty</option>
           <For each={props.templates.filter((t) => t.name !== "empty")} keyed={(t) => t.name}>
@@ -586,7 +606,11 @@ function NewSandboxFields(props: {
         <input
           type="checkbox"
           checked={props.customize}
-          onChange={(e) => props.setCustomize(e.currentTarget.checked)}
+          onChange={(e) => {
+            const on = e.currentTarget.checked;
+            props.setCustomize(on);
+            if (on) applyTemplateDoc(props.tpl, props.setEnvCfg, props.setEnvVars);
+          }}
         />
         Customize
       </label>
@@ -725,17 +749,6 @@ function jsonText(value: Json | undefined): string {
   return JSON.stringify(value ?? {}, null, 2);
 }
 
-function packageAllow(opt: AgentOption): string[] {
-  if (!Array.isArray(opt.default)) return [];
-  const out: string[] = [];
-  for (const item of opt.default) {
-    if (isJsonObject(item)) continue;
-    if (item === null || Array.isArray(item)) continue;
-    out.push(String(item));
-  }
-  return out;
-}
-
 function selectedPackages(value: Json | undefined): string[] {
   if (!Array.isArray(value)) return [];
   const out: string[] = [];
@@ -744,6 +757,10 @@ function selectedPackages(value: Json | undefined): string[] {
     out.push(String(item));
   }
   return out;
+}
+
+function nixAttr(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_'-]*$/.test(name);
 }
 
 function OptionField(props: {
@@ -766,31 +783,66 @@ function OptionField(props: {
       </label>
     );
   }
-  if (opt().type === "packages") {
-    const allow = packageAllow(opt());
+  if (opt().type === "packageNames") {
     const selected = () => selectedPackages(value());
+    const draftName = () => draft().trim();
+    const invalid = () => draftName() !== "" && !nixAttr(draftName());
     return (
-      <>
-        <div class={`${label} mb-1`}>{opt().name}</div>
-        <For each={allow}>
-          {(pkg) => (
-            <label class="flex items-center gap-2 text-[12px]">
-              <input
-                type="checkbox"
-                checked={selected().includes(pkg())}
-                onChange={(e) => {
-                  const on = e.currentTarget.checked;
-                  const next = new Set(selected());
-                  if (on) next.add(pkg());
-                  else next.delete(pkg());
-                  props.onSet(setField(props.cur, opt().name, [...next]));
-                }}
-              />
-              {pkg()}
-            </label>
-          )}
+      <div class="mt-1.5">
+        <div class={label}>{opt().name}</div>
+        <For each={selected()} keyed={(n) => n}>
+          {(pkg) => {
+            const name = pkg();
+            return (
+              <div class="mt-0.5 flex items-center gap-1 text-[12px]">
+                <span class="font-mono">{name}</span>
+                <button
+                  type="button"
+                  class="border border-twm-line bg-twm px-2 py-0.5 font-bold text-white"
+                  onClick={() => {
+                    props.onSet(
+                      setField(
+                        props.cur,
+                        opt().name,
+                        selected().filter((n) => n !== name),
+                      ),
+                    );
+                  }}
+                >
+                  remove
+                </button>
+              </div>
+            );
+          }}
         </For>
-      </>
+        <div class="mt-1 flex gap-1">
+          <input
+            class={field}
+            value={draft()}
+            placeholder="nixpkgs name"
+            onInput={(e) => setDraft(e.currentTarget.value)}
+          />
+          <button
+            type="button"
+            class="border border-twm-line bg-twm px-2 py-0.5 font-bold text-white"
+            onClick={() => {
+              const name = draftName();
+              if (!name || invalid()) return;
+              if (selected().includes(name)) {
+                setDraft("");
+                return;
+              }
+              props.onSet(setField(props.cur, opt().name, [...selected(), name]));
+              setDraft("");
+            }}
+          >
+            add
+          </button>
+        </div>
+        <Show when={invalid()}>
+          <p class="text-[12px] text-red-700">invalid package name</p>
+        </Show>
+      </div>
     );
   }
   if (opt().type === "stringMap") {
@@ -971,14 +1023,7 @@ function TemplatesFields(props: {
           onChange={(e) => {
             const name = e.currentTarget.value;
             props.setTplName(name);
-            if (!name) return;
-            api
-              .template(name)
-              .then((cfg) => {
-                props.setEnvCfg(cfg.programs ?? {});
-                props.setEnvVars(JSON.stringify(cfg.env ?? {}, null, 2));
-              })
-              .catch(() => {});
+            applyTemplateDoc(name, props.setEnvCfg, props.setEnvVars);
           }}
         >
           <option value="">pick a saved Template</option>

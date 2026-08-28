@@ -4,17 +4,9 @@ pub const DEFAULT_FLAKE: &str = include_str!("../../environment/empty/flake.nix"
 pub const DEFAULT_LOCK: &str = include_str!("../../environment/empty/flake.lock");
 pub const DEFAULT_HOME: &str = include_str!("../../environment/empty/home.nix");
 pub const DEFAULT_CONFIG: &str = include_str!("../../environment/empty/config.json");
-pub const DEFAULT_AGENTS: &str = include_str!("../../environment/empty/agents.json");
-pub const DEFAULT_DUMP: &str = include_str!("../../environment/empty/dump-options.nix");
+pub const DEFAULT_FORM: &str = include_str!("../../environment/empty/form.json");
 
-const FILES: [&str; 6] = [
-    "flake.nix",
-    "flake.lock",
-    "home.nix",
-    "config.json",
-    "dump-options.nix",
-    "agents.json",
-];
+const FILES: [&str; 4] = ["flake.nix", "flake.lock", "home.nix", "config.json"];
 pub const CREATE_DIR: &str = "create-environment";
 
 use std::path::Path;
@@ -56,10 +48,6 @@ pub fn write_default(dir: &Path) -> Result<(), ActionError> {
     std::fs::write(env_dir.join("home.nix"), DEFAULT_HOME).map_err(|_| ActionError::Internal)?;
     std::fs::write(env_dir.join("config.json"), DEFAULT_CONFIG.trim())
         .map_err(|_| ActionError::Internal)?;
-    std::fs::write(env_dir.join("dump-options.nix"), DEFAULT_DUMP)
-        .map_err(|_| ActionError::Internal)?;
-    std::fs::write(env_dir.join("agents.json"), DEFAULT_AGENTS.trim())
-        .map_err(|_| ActionError::Internal)?;
     Ok(())
 }
 
@@ -69,7 +57,6 @@ pub fn fingerprint(dir: &Path) -> Result<String, ActionError> {
     let lock = std::fs::read(env.join("flake.lock")).map_err(|_| ActionError::Internal)?;
     let home = std::fs::read(env.join("home.nix")).map_err(|_| ActionError::Internal)?;
     let flake = std::fs::read(env.join("flake.nix")).map_err(|_| ActionError::Internal)?;
-    let agents = std::fs::read(env.join("agents.json")).unwrap_or_default();
     let mut out = Vec::new();
     out.extend_from_slice(&cfg);
     out.push(b'\n');
@@ -78,8 +65,6 @@ pub fn fingerprint(dir: &Path) -> Result<String, ActionError> {
     out.extend_from_slice(&home);
     out.push(b'\n');
     out.extend_from_slice(&flake);
-    out.push(b'\n');
-    out.extend_from_slice(&agents);
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
@@ -104,84 +89,89 @@ pub fn sanitize(value: &serde_json::Value) -> Result<serde_json::Value, ActionEr
         return Err(ActionError::BadRequest("config must be an object"));
     }
     let mut value = value.clone();
-    strip_secrets(&mut value);
     clamp_programs(&mut value);
-    clamp_extra_packages(&mut value);
+    check_extra_packages(&value)?;
     Ok(value)
 }
 
-fn agents() -> serde_json::Value {
-    serde_json::from_str(DEFAULT_AGENTS).expect("agents json")
+pub fn load_agent_schema() -> Result<serde_json::Value, String> {
+    let value: serde_json::Value = serde_json::from_str(DEFAULT_FORM).map_err(|e| e.to_string())?;
+    let Some(programs) = value.get("programs").and_then(|p| p.as_array()) else {
+        return Err("form.json missing programs".into());
+    };
+    if programs.is_empty() {
+        return Err("form.json has no programs".into());
+    }
+    for p in programs {
+        let Some(name) = p.get("name").and_then(|n| n.as_str()) else {
+            return Err("form.json program missing name".into());
+        };
+        if name.is_empty() {
+            return Err("form.json program missing name".into());
+        }
+        if p.get("options").and_then(|o| o.as_array()).is_none() {
+            return Err("form.json program missing options".into());
+        }
+    }
+    Ok(value)
 }
 
 pub fn agent_names() -> Vec<String> {
-    agents()["programs"]
-        .as_array()
-        .unwrap_or(&Vec::new())
+    load_agent_schema()
+        .ok()
+        .and_then(|v| v.get("programs").cloned())
+        .and_then(|p| p.as_array().cloned())
+        .unwrap_or_default()
         .iter()
-        .filter_map(|v| v.as_str().map(str::to_string))
+        .filter_map(|p| p.get("name").and_then(|n| n.as_str()).map(str::to_string))
         .collect()
 }
 
-fn extra_allow(program: &str) -> Vec<String> {
-    agents()["extraPackages"][program]
-        .as_array()
-        .unwrap_or(&Vec::new())
-        .iter()
-        .filter_map(|v| v.as_str().map(str::to_string))
-        .collect()
-}
-
-fn is_secret_key(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "apikey" | "token" | "password" | "secret" | "authtoken"
-    )
-}
-
-fn strip_secrets(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(map) => {
-            map.retain(|k, _| !is_secret_key(k));
-            for v in map.values_mut() {
-                strip_secrets(v);
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            for v in arr {
-                strip_secrets(v);
-            }
-        }
-        _ => {}
-    }
+fn nix_attr(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '\'' || c == '-')
 }
 
 fn clamp_programs(value: &mut serde_json::Value) {
     let allowed = agent_names();
+    if allowed.is_empty() {
+        return;
+    }
     let Some(programs) = value.get_mut("programs").and_then(|p| p.as_object_mut()) else {
         return;
     };
     programs.retain(|k, _| allowed.iter().any(|a| a == k));
 }
 
-fn clamp_extra_packages(value: &mut serde_json::Value) {
-    let Some(programs) = value.get_mut("programs").and_then(|p| p.as_object_mut()) else {
-        return;
+fn check_extra_packages(value: &serde_json::Value) -> Result<(), ActionError> {
+    let Some(programs) = value.get("programs").and_then(|p| p.as_object()) else {
+        return Ok(());
     };
-    for (name, cfg) in programs.iter_mut() {
-        let Some(obj) = cfg.as_object_mut() else {
+    for cfg in programs.values() {
+        let Some(extra) = cfg.get("extraPackages") else {
             continue;
         };
-        let allow = extra_allow(name);
-        if allow.is_empty() {
-            obj.remove("extraPackages");
-            continue;
+        let Some(arr) = extra.as_array() else {
+            return Err(ActionError::BadRequest(
+                "extraPackages must be an array of package names",
+            ));
+        };
+        for item in arr {
+            let Some(name) = item.as_str() else {
+                return Err(ActionError::BadRequest(
+                    "extraPackages entries must be strings",
+                ));
+            };
+            if !nix_attr(name) {
+                return Err(ActionError::BadRequest("invalid package name"));
+            }
         }
-        let Some(arr) = obj.get_mut("extraPackages").and_then(|v| v.as_array_mut()) else {
-            continue;
-        };
-        arr.retain(|v| v.as_str().is_some_and(|s| allow.iter().any(|a| a == s)));
     }
+    Ok(())
 }
 
 fn secrets_path(dir: &Path) -> std::path::PathBuf {
@@ -256,126 +246,6 @@ pub fn document(dir: &Path) -> Result<serde_json::Value, ActionError> {
     Ok(cfg)
 }
 
-const DROP_OPTIONS: &[&str] = &["package", "finalPackage", "enableMcpIntegration"];
-
-pub fn schema_from_hm(raw: &serde_json::Value) -> Result<serde_json::Value, ActionError> {
-    let Some(programs) = raw.get("programs").and_then(|p| p.as_array()) else {
-        return Err(ActionError::Internal);
-    };
-    let mut out = Vec::new();
-    for p in programs {
-        let Some(name) = p.get("name").and_then(|n| n.as_str()) else {
-            continue;
-        };
-        let desc = p
-            .get("description")
-            .and_then(|d| d.as_str())
-            .unwrap_or(name);
-        let Some(opts) = p.get("options").and_then(|o| o.as_array()) else {
-            continue;
-        };
-        let mut options = Vec::new();
-        for opt in opts {
-            if let Some(filtered) = filter_option(name, opt) {
-                options.push(filtered);
-            }
-        }
-        out.push(serde_json::json!({
-            "name": name,
-            "description": desc,
-            "options": options,
-        }));
-    }
-    Ok(serde_json::json!({ "programs": out }))
-}
-
-fn filter_option(program: &str, opt: &serde_json::Value) -> Option<serde_json::Value> {
-    let name = opt.get("name")?.as_str()?;
-    if DROP_OPTIONS.contains(&name) {
-        return None;
-    }
-    if name.to_ascii_lowercase().contains("mcp") {
-        return None;
-    }
-    if opt.get("internal").and_then(|v| v.as_bool()) == Some(true) {
-        return None;
-    }
-    if opt.get("readOnly").and_then(|v| v.as_bool()) == Some(true) {
-        return None;
-    }
-    let ty = opt.get("type").and_then(|t| t.as_str()).unwrap_or("");
-    let ty_l = ty.to_ascii_lowercase();
-    if name != "extraPackages" && ty_l.contains("package") && !ty_l.contains("list") {
-        return None;
-    }
-    let mapped = map_type(name, &ty_l);
-    let default = if name == "extraPackages" {
-        serde_json::Value::Array(
-            extra_allow(program)
-                .into_iter()
-                .map(serde_json::Value::String)
-                .collect(),
-        )
-    } else {
-        opt.get("default")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null)
-    };
-    Some(serde_json::json!({
-        "name": name,
-        "type": mapped,
-        "default": default,
-        "description": opt.get("description").and_then(|d| d.as_str()).unwrap_or(""),
-    }))
-}
-
-pub fn load_agent_schema() -> Result<serde_json::Value, String> {
-    live_schema().map_err(|e| e.to_string())
-}
-
-fn live_schema() -> Result<serde_json::Value, ActionError> {
-    let dir = tempfile::tempdir().map_err(|_| ActionError::Internal)?;
-    write_default(dir.path())?;
-    let flake = dir
-        .path()
-        .join("environment")
-        .canonicalize()
-        .map_err(|_| ActionError::Internal)?;
-    let url = crate::nix::path_flake_url_pub(&flake)?;
-    let expr = format!("let f = builtins.getFlake ''{url}''; in f.agentOptions");
-    let raw = crate::nix::eval_string(&expr, "<snowbox-agent-options>")?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|_| ActionError::Internal)?;
-    schema_from_hm(&parsed)
-}
-
-fn map_type(name: &str, ty: &str) -> &'static str {
-    if name == "extraPackages" {
-        return "packages";
-    }
-    if ty.contains("bool") {
-        return "boolean";
-    }
-    if name != "extraPackages" && ty.contains("list") {
-        return "json";
-    }
-    if ty.contains("int") || ty.contains("float") || ty.contains("number") {
-        return "number";
-    }
-    let attrs = ty.contains("attribute set") || ty.contains("attrs");
-    let textish = ty.contains("string") || ty.contains("lines") || ty.contains("path");
-    if attrs && textish && !ty.contains("package") {
-        return "stringMap";
-    }
-    if ty.contains("json") || attrs {
-        return "json";
-    }
-    if ty.contains("path") || ty.contains("string") || ty.contains("lines") {
-        return "string";
-    }
-    "json"
-}
-
 pub fn set_document(
     dir: &Path,
     value: &serde_json::Value,
@@ -413,6 +283,8 @@ mod tests {
         assert!(dir.path().join("environment/flake.lock").is_file());
         let cfg = config(dir.path()).unwrap();
         assert_eq!(cfg["programs"]["claude-code"]["enable"], false);
+        assert!(!dir.path().join("environment/agents.json").is_file());
+        assert!(!dir.path().join("environment/form.json").is_file());
         let a = fingerprint(dir.path()).unwrap();
         let b = fingerprint(dir.path()).unwrap();
         assert_eq!(a, b);
@@ -446,28 +318,21 @@ mod tests {
         assert!(names.iter().any(|n| n == "claude-code"));
         assert!(names.iter().any(|n| n == "codex"));
         assert!(names.iter().any(|n| n == "pi-coding-agent"));
-    }
-
-    #[test]
-    fn set_config_strips_secret_keys_from_json() {
-        let dir = tempfile::tempdir().unwrap();
-        write_default(dir.path()).unwrap();
-        let mut cfg = config(dir.path()).unwrap();
-        cfg["programs"]["pi-coding-agent"]["models"] = serde_json::json!({
-            "apiKey": "sk-live",
-            "defaultProvider": "ollama"
-        });
-        set_config(dir.path(), &cfg).unwrap();
-        let out = config(dir.path()).unwrap();
-        assert!(
-            out["programs"]["pi-coding-agent"]["models"]
-                .get("apiKey")
-                .is_none()
-        );
-        assert_eq!(
-            out["programs"]["pi-coding-agent"]["models"]["defaultProvider"],
-            "ollama"
-        );
+        let schema = load_agent_schema().unwrap();
+        let pi = schema["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "pi-coding-agent")
+            .unwrap();
+        let extra = pi["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["name"] == "extraPackages")
+            .unwrap();
+        assert_eq!(extra["type"], "packageNames");
+        assert_eq!(extra["default"], serde_json::json!([]));
     }
 
     #[test]
@@ -506,95 +371,40 @@ mod tests {
     }
 
     #[test]
-    fn schema_from_hm_drops_unusable_keeps_agent_options() {
-        let raw = serde_json::json!({
-            "programs": [{
-                "name": "pi-coding-agent",
-                "description": "Pi",
-                "options": [
-                    {"name": "enable", "type": "boolean", "default": false, "description": "on", "internal": false, "readOnly": false},
-                    {"name": "package", "type": "package", "default": null, "description": "pkg", "internal": false, "readOnly": false},
-                    {"name": "finalPackage", "type": "package", "default": null, "description": "computed", "internal": true, "readOnly": true},
-                    {"name": "enableMcpIntegration", "type": "boolean", "default": false, "description": "mcp", "internal": false, "readOnly": false},
-                    {"name": "mcpServers", "type": "JSON value", "default": {}, "description": "mcp servers", "internal": false, "readOnly": false},
-                    {"name": "keybindings", "type": "JSON value", "default": {}, "description": "keys", "internal": false, "readOnly": false},
-                    {"name": "rules", "type": "attribute set of (strings concatenated with \\n or absolute path)", "default": {}, "description": "rules", "internal": false, "readOnly": false},
-                    {"name": "configDir", "type": "string", "default": "/home/snow/.pi/agent", "description": "dir", "internal": false, "readOnly": false},
-                    {"name": "extraPackages", "type": "list of package", "default": [], "description": "path extras", "internal": false, "readOnly": false},
-                    {"name": "memory.source", "type": "null or path", "default": null, "description": "host file", "internal": false, "readOnly": false}
-                ]
-            }]
-        });
-        let out = schema_from_hm(&raw).unwrap();
-        let opts = &out["programs"][0]["options"];
-        let names: Vec<&str> = opts
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|o| o["name"].as_str().unwrap())
-            .collect();
-        assert_eq!(
-            names,
-            [
-                "enable",
-                "keybindings",
-                "rules",
-                "configDir",
-                "extraPackages",
-                "memory.source"
-            ]
-        );
-        let rules = opts
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|o| o["name"] == "rules")
-            .unwrap();
-        assert_eq!(rules["type"], "stringMap");
-        let extra = opts
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|o| o["name"] == "extraPackages")
-            .unwrap();
-        assert_eq!(extra["type"], "packages");
-        assert_eq!(extra["default"], serde_json::json!(["nodejs", "bun"]));
-        let path_opt = opts
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|o| o["name"] == "memory.source")
-            .unwrap();
-        assert_eq!(path_opt["type"], "string");
-        let keys = opts
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|o| o["name"] == "keybindings")
-            .unwrap();
-        assert_eq!(keys["type"], "json");
-        assert!(!names.contains(&"mcpServers"));
-        assert!(!names.contains(&"enableMcpIntegration"));
-    }
-
-    #[test]
-    fn extra_packages_are_clamped_to_the_allowlist() {
+    fn extra_packages_invalid_name_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
         write_default(dir.path()).unwrap();
         let mut cfg = config(dir.path()).unwrap();
         cfg["programs"]["pi-coding-agent"]["extraPackages"] =
-            serde_json::json!(["nodejs", "hello", "bun"]);
-        cfg["programs"]["claude-code"]["extraPackages"] = serde_json::json!(["nodejs"]);
+            serde_json::json!(["hello", "not a package"]);
+        let err = set_config(dir.path(), &cfg).unwrap_err();
+        assert!(matches!(
+            err,
+            ActionError::BadRequest("invalid package name")
+        ));
+    }
+
+    #[test]
+    fn extra_packages_valid_names_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        write_default(dir.path()).unwrap();
+        let mut cfg = config(dir.path()).unwrap();
+        cfg["programs"]["pi-coding-agent"]["extraPackages"] = serde_json::json!(["hello", "git"]);
         set_config(dir.path(), &cfg).unwrap();
         let out = config(dir.path()).unwrap();
         assert_eq!(
             out["programs"]["pi-coding-agent"]["extraPackages"],
-            serde_json::json!(["nodejs", "bun"])
+            serde_json::json!(["hello", "git"])
         );
-        assert!(
-            out["programs"]["claude-code"]
-                .get("extraPackages")
-                .is_none()
-        );
+    }
+
+    #[test]
+    fn extra_packages_must_be_an_array() {
+        let dir = tempfile::tempdir().unwrap();
+        write_default(dir.path()).unwrap();
+        let mut cfg = config(dir.path()).unwrap();
+        cfg["programs"]["pi-coding-agent"]["extraPackages"] = serde_json::json!("hello");
+        let err = set_config(dir.path(), &cfg).unwrap_err();
+        assert!(matches!(err, ActionError::BadRequest(_)));
     }
 }

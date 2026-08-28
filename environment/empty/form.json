@@ -1,0 +1,94 @@
+{
+  "programs": [
+    {
+      "name": "claude-code",
+      "description": "Claude Code (home-manager programs.claude-code)",
+      "options": [
+        {
+          "name": "enable",
+          "type": "boolean",
+          "default": false,
+          "description": "Install and configure Claude Code."
+        },
+        {
+          "name": "settings",
+          "type": "json",
+          "default": {},
+          "description": "JSON written to Claude Code settings."
+        }
+      ]
+    },
+    {
+      "name": "codex",
+      "description": "Codex (home-manager programs.codex)",
+      "options": [
+        {
+          "name": "enable",
+          "type": "boolean",
+          "default": false,
+          "description": "Install and configure Codex."
+        },
+        {
+          "name": "settings",
+          "type": "json",
+          "default": {},
+          "description": "JSON written to Codex settings."
+        },
+        {
+          "name": "rules",
+          "type": "stringMap",
+          "default": {},
+          "description": "Named rules files (one text box per name)."
+        }
+      ]
+    },
+    {
+      "name": "pi-coding-agent",
+      "description": "Pi (home-manager programs.pi-coding-agent)",
+      "options": [
+        {
+          "name": "enable",
+          "type": "boolean",
+          "default": false,
+          "description": "Install and configure Pi Coding Agent."
+        },
+        {
+          "name": "settings",
+          "type": "json",
+          "default": {},
+          "description": "JSON written to ~/.pi/agent/settings.json."
+        },
+        {
+          "name": "keybindings",
+          "type": "json",
+          "default": {},
+          "description": "JSON written to ~/.pi/agent/keybindings.json."
+        },
+        {
+          "name": "models",
+          "type": "json",
+          "default": {},
+          "description": "JSON written to ~/.pi/agent/models.json."
+        },
+        {
+          "name": "configDir",
+          "type": "string",
+          "default": "",
+          "description": "Directory holding Pi configuration, a path inside the Sandbox."
+        },
+        {
+          "name": "context",
+          "type": "string",
+          "default": "",
+          "description": "Global context text, or a path inside the Sandbox."
+        },
+        {
+          "name": "extraPackages",
+          "type": "packageNames",
+          "default": [],
+          "description": "nixpkgs package names on Pi's PATH. Empty by default."
+        }
+      ]
+    }
+  ]
+}

@@ -999,6 +999,20 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(patched["programs"]["claude-code"]["enable"], true);
+
+        let (status, bad) = send(
+            make(),
+            authed(Request::put(&url))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"programs":{"pi-coding-agent":{"enable":true,"extraPackages":["not a package"]}}}"#,
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(bad["error"], "bad_request");
+        assert_eq!(bad["detail"], "invalid package name");
     }
 
     #[tokio::test]
@@ -1124,9 +1138,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_options_failed_dump_is_unavailable() {
+    async fn agent_options_parse_failure_is_unavailable() {
         let (_dir, mut state) = harness();
-        state.agent_options = Arc::new(Err("eval failed".into()));
+        state.agent_options = Arc::new(Err("form.json missing programs".into()));
         let (status, json) = send(
             router(state),
             authed(Request::get("http://127.0.0.1/api/v1/agent-options"))
@@ -1136,7 +1150,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(json["error"], "failed");
-        assert_eq!(json["detail"], "eval failed");
+        assert_eq!(json["detail"], "form.json missing programs");
     }
 
     #[tokio::test]

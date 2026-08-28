@@ -37,7 +37,7 @@ Reset puts the Sandbox back to Create: restores the Environment as it was at Cre
 | `POST` | `/templates` | Save the current Environment as a Template. Body `{"name":"work","sandbox":"<id>"}`. `201`. Cannot overwrite a shipped Template. Overwrites a user-saved name. |
 | `GET` | `/templates/{name}` | That Template’s `config.json`. `404` if missing. |
 | `PUT` | `/templates/{name}` | Replace that Template’s `config.json`. Cannot overwrite a shipped Template. |
-| `GET` | `/agent-options` | home-manager Agent option schema the Environment form renders. Dumped once when the Daemon starts from the Environment pin. Unusable options (`package`, MCP wiring, internal) are dropped. Dump failed → `503` `failed`. |
+| `GET` | `/agent-options` | Agent option schema the Environment form renders. Parsed from the repo file `environment/empty/form.json` when the Daemon starts (not a live home-manager eval, not copied into Sandboxes). Bad file → `503` `failed`. |
 | `GET` | `/sandboxes/{id}` | One record. `404` if missing |
 | `PATCH` | `/sandboxes/{id}` | Update Limits. Body `{"limits":{"cpu":4,"ram":4294967296,"disk":34359738368}}` — any field optional. Applied on the next start. `404` if missing |
 | `POST` | `/sandboxes/{id}/start` | `stopped` → `running`. Restores machine state when present, otherwise boots. `409` if already running. No hypervisor → `503` `failed` |
@@ -46,7 +46,7 @@ Reset puts the Sandbox back to Create: restores the Environment as it was at Cre
 | `POST` | `/sandboxes/{id}/copy-in` | Body `{"from":"/host/path","replace":false}` |
 | `POST` | `/sandboxes/{id}/copy-out` | Body `{"to":"/host/path","replace":false}` |
 | `GET` | `/sandboxes/{id}/environment` | Current home-manager Agent config (`config.json`). |
-| `PUT` | `/sandboxes/{id}/environment` | Replace that config. Updates the Host Environment. If the Sandbox is running, realises into the Cache and activates (no reboot). |
+| `PUT` | `/sandboxes/{id}/environment` | Replace that config. Updates the Host Environment. If the Sandbox is running, realises into the Cache and activates (no reboot). `extraPackages` entries are nixpkgs attribute names (identifiers). Invalid name → `400` `invalid package name`. |
 | `GET` | `/sandboxes/{id}/publish` | Published ports for this Sandbox. Empty while none. |
 | `POST` | `/sandboxes/{id}/publish` | Body `{"port":3000,"host_port":null}`. Bind `127.0.0.1` only. Omitted or null `host_port` binds an ephemeral Host port; the response `host_port` is the assigned port. Sandbox must be running. `201` `{port,host_port,url}`. |
 | `DELETE` | `/sandboxes/{id}/publish/{port}` | Drop a published port. `204` |
