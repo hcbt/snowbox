@@ -27,6 +27,10 @@ pub struct Window {
 pub struct IconManager {
     pub x: i32,
     pub y: i32,
+    #[serde(default = "default_icon_w")]
+    pub w: u32,
+    #[serde(default = "default_icon_h")]
+    pub h: u32,
     #[serde(default = "default_true")]
     pub visible: bool,
 }
@@ -35,11 +39,21 @@ fn default_true() -> bool {
     true
 }
 
+fn default_icon_w() -> u32 {
+    200
+}
+
+fn default_icon_h() -> u32 {
+    240
+}
+
 impl Default for IconManager {
     fn default() -> Self {
         Self {
             x: 8,
             y: 8,
+            w: default_icon_w(),
+            h: default_icon_h(),
             visible: true,
         }
     }
@@ -208,5 +222,15 @@ mod tests {
             ActionError::NotFound
         ));
         assert!(store.get().windows.is_empty());
+    }
+
+    #[test]
+    fn icon_manager_missing_size_gets_defaults() {
+        let im: IconManager = serde_json::from_str(r#"{"x":1,"y":2}"#).unwrap();
+        assert_eq!(im.x, 1);
+        assert_eq!(im.y, 2);
+        assert_eq!(im.w, 200);
+        assert_eq!(im.h, 240);
+        assert!(im.visible);
     }
 }

@@ -15,33 +15,11 @@ function focusTerm(id: string): void {
   }
 }
 
-function dragOffset(
-  e: MouseEvent,
-  origin: { x: number; y: number },
-  onMove: (x: number, y: number) => void,
-  onEnd: () => void,
-): void {
-  e.preventDefault();
-  e.stopPropagation();
-  const startX = e.clientX;
-  const startY = e.clientY;
-  const move = (ev: MouseEvent) => {
-    onMove(origin.x + ev.clientX - startX, origin.y + ev.clientY - startY);
-  };
-  const up = () => {
-    window.removeEventListener("mousemove", move);
-    window.removeEventListener("mouseup", up);
-    onEnd();
-  };
-  window.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", up);
-}
-
 export function App() {
   const [sandboxes, setSandboxes] = createSignal<Sandbox[]>([]);
   const [layout, setLayout] = createSignal<Layout>({
     windows: [],
-    icon_manager: { x: 8, y: 8, visible: true },
+    icon_manager: { x: 8, y: 8, w: 200, h: 240, visible: true },
   });
   const [focus, setFocus] = createSignal<string | null>(null);
   const [menu, setMenu] = createSignal<MenuHit | null>(null);
@@ -55,7 +33,18 @@ export function App() {
     setSandboxes(s.sandboxes);
     const ids = new Set(s.sandboxes.map((b) => b.id));
     const windows = l.windows.filter((w) => ids.has(w.sandbox));
-    const next = { ...l, windows };
+    const im = l.icon_manager;
+    const next = {
+      ...l,
+      windows,
+      icon_manager: {
+        x: im.x,
+        y: im.y,
+        w: im.w > 0 ? im.w : 200,
+        h: im.h > 0 ? im.h : 240,
+        visible: im.visible,
+      },
+    };
     setLayout(next);
     setReady(true);
     if (windows.length !== l.windows.length) {
@@ -145,17 +134,18 @@ export function App() {
         patchWin={patchWin}
         raise={raise}
         run={run}
-        drag={(e) =>
-          dragOffset(
-            e,
-            layout().icon_manager,
-            (x, y) =>
-              setLayout({
-                ...layout(),
-                icon_manager: { ...layout().icon_manager, x, y },
-              }),
-            () => save(layout()),
-          )
+        patchIcon={(patch) =>
+          setLayout({
+            ...layout(),
+            icon_manager: { ...layout().icon_manager, ...patch },
+          })
+        }
+        saveIcon={() => save(layout())}
+        hide={() =>
+          save({
+            ...layout(),
+            icon_manager: { ...layout().icon_manager, visible: false },
+          })
         }
       />
       <CanvasWindows
@@ -234,27 +224,27 @@ function IconManager(props: {
   patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
   raise: (id: string) => void;
   run: (fn: () => Promise<void>) => Promise<boolean>;
-  drag: (e: MouseEvent) => void;
+  patchIcon: (patch: { x?: number; y?: number; w?: number; h?: number }) => void;
+  saveIcon: () => void;
+  hide: () => void;
 }) {
+  const im = () => props.layout.icon_manager;
   return (
-    <Show when={props.layout.icon_manager.visible}>
-      <div
-        class="absolute min-w-40 bg-twm"
-        style={{
-          left: `${props.layout.icon_manager.x}px`,
-          top: `${props.layout.icon_manager.y}px`,
-          "z-index": 99990,
-        }}
+    <Show when={im().visible}>
+      <Frame
+        title="Icon Manager"
+        x={im().x}
+        y={im().y}
+        w={im().w}
+        h={im().h}
+        z={99990}
+        onMove={(x, y) => props.patchIcon({ x, y })}
+        onResize={(w, h) => props.patchIcon({ w, h })}
+        onMoveEnd={props.saveIcon}
+        onClose={props.hide}
         onContextMenu={(e) => props.openMenu(e)}
       >
-        <div
-          class="flex h-5 cursor-grab items-center gap-1.5 bg-twm px-[3px] text-[13px] font-bold text-white"
-          onMouseDown={props.drag}
-        >
-          <span class="size-3 shrink-0 border border-white bg-twm-hi" />
-          <span class="flex-1">Icon Manager</span>
-        </div>
-        <div class="border-x-2 border-b-2 border-twm">
+        <div class="h-full overflow-auto bg-twm">
           <For each={props.layout.windows} keyed={(w) => w.id}>
             {(w) => (
               <button
@@ -299,7 +289,7 @@ function IconManager(props: {
             )}
           </For>
         </div>
-      </div>
+      </Frame>
     </Show>
   );
 }

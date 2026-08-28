@@ -112,6 +112,6 @@ Layout object:
       "iconified": false
     }
   ],
-  "icon_manager": { "x": 8, "y": 8, "visible": true }
+  "icon_manager": { "x": 8, "y": 8, "w": 200, "h": 240, "visible": true }
 }
 ```

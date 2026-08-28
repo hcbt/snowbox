@@ -49,7 +49,7 @@ export type WindowRec = {
 
 export type Layout = {
   windows: WindowRec[];
-  icon_manager: { x: number; y: number; visible: boolean };
+  icon_manager: { x: number; y: number; w: number; h: number; visible: boolean };
 };
 
 declare global {
