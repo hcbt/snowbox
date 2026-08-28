@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 use axum::{
-    body::Body,
+    Json, body::Body,
     http::{StatusCode, Uri, header::CONTENT_TYPE},
     middleware,
     response::{Html, IntoResponse, Response},
@@ -156,7 +156,16 @@ fn with_ui(router: axum::Router, state: api::AppState) -> axum::Router {
     let token = state.token.clone();
     router.fallback(move |uri: Uri| {
         let token = token.clone();
-        async move { serve_canvas(uri, &token).await }
+        async move {
+            if uri.path().starts_with("/api/") {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": "not_found"})),
+                )
+                    .into_response();
+            }
+            serve_canvas(uri, &token).await
+        }
     })
 }
 

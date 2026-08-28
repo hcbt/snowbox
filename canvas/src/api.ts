@@ -112,8 +112,13 @@ export async function json<T>(path: string, init?: RequestInit): Promise<T> {
   if (r.status === 204) {
     throw new Error("unexpected empty body");
   }
-  // SAFETY: r.json is untyped; T is the Daemon API contract for this path.
-  return (await r.json()) as T;
+  const text = await r.text();
+  try {
+    // SAFETY: JSON.parse is untyped; T is the Daemon API contract for this path.
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("expected JSON");
+  }
 }
 
 /** 204 / no JSON body. */

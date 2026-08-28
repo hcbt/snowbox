@@ -81,6 +81,17 @@ describe("json / empty", () => {
     stubFetch(() => new Response(null, { status: 404, statusText: "Not Found" }));
     await expect(empty("/x", { method: "DELETE" })).rejects.toThrow("Not Found");
   });
+
+  test("HTML 200 is not treated as JSON", async () => {
+    stubFetch(
+      () =>
+        new Response("<!doctype html>", {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+    );
+    await expect(json("/api/v1/progress")).rejects.toThrow("expected JSON");
+  });
 });
 
 describe("api.unpublish", () => {
