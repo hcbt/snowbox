@@ -98,10 +98,8 @@ impl Library {
         if !dest.join("flake.nix").is_file() {
             return Err(ActionError::NotFound);
         }
-        if !value.is_object() {
-            return Err(ActionError::BadRequest("config must be an object"));
-        }
-        let raw = serde_json::to_string_pretty(value).map_err(|_| ActionError::Internal)?;
+        let value = crate::environment::sanitize(value)?;
+        let raw = serde_json::to_string_pretty(&value).map_err(|_| ActionError::Internal)?;
         fs::write(dest.join("config.json"), raw).map_err(|_| ActionError::Internal)?;
         self.config(name)
     }

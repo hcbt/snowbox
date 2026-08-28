@@ -96,6 +96,7 @@ export function OverlayDialog(props: {
   const [customize, setCustomize] = createSignal(false);
   const [envVars, setEnvVars] = createSignal("");
   const [tplName, setTplName] = createSignal("");
+  const [optErr, setOptErr] = createSignal("");
 
   onSettled(() => {
     loadOverlay(props.overlay, props.sandbox, {
@@ -105,6 +106,7 @@ export function OverlayDialog(props: {
       setEnvDoc,
       setEnvCfg,
       setEnvVars,
+      setOptErr,
     });
   });
 
@@ -179,6 +181,7 @@ export function OverlayDialog(props: {
           setCustomize={setCustomize}
           tplName={tplName()}
           setTplName={setTplName}
+          optErr={optErr()}
           pickSandbox={props.pickSandbox}
           run={props.run}
         />
@@ -220,6 +223,7 @@ function loadOverlay(
     setEnvDoc: (d: EnvironmentDoc) => void;
     setEnvCfg: (c: { [name: string]: EnvProgram }) => void;
     setEnvVars: (v: string) => void;
+    setOptErr: (v: string) => void;
   },
 ): void {
   if (
@@ -245,8 +249,14 @@ function loadOverlay(
   ) {
     api
       .agentOptions()
-      .then((opts) => set.setAgents(opts.programs))
-      .catch(() => {});
+      .then((opts) => {
+        set.setOptErr("");
+        set.setAgents(opts.programs);
+      })
+      .catch((err) => {
+        set.setAgents([]);
+        set.setOptErr(err instanceof Error ? err.message : "agent options failed");
+      });
   }
   if (overlay.kind === "environment" && sandbox) {
     api
@@ -391,6 +401,7 @@ function OverlayFields(props: {
   setCustomize: (v: boolean) => void;
   tplName: string;
   setTplName: (v: string) => void;
+  optErr: string;
   pickSandbox: (id: string) => void;
   run: (fn: () => Promise<void>, done?: string) => Promise<boolean>;
 }) {
@@ -425,6 +436,7 @@ function OverlayFields(props: {
           setEnvCfg={props.setEnvCfg}
           envVars={props.envVars}
           setEnvVars={props.setEnvVars}
+          optErr={props.optErr}
         />
       </Show>
       <Show when={ov().kind === "save-template"}>
@@ -466,6 +478,7 @@ function OverlayFields(props: {
           envVars={props.envVars}
           setEnvVars={props.setEnvVars}
           secrets
+          optErr={props.optErr}
         />
       </Show>
       <Show when={ov().kind === "templates"}>
@@ -478,6 +491,7 @@ function OverlayFields(props: {
           setEnvCfg={props.setEnvCfg}
           envVars={props.envVars}
           setEnvVars={props.setEnvVars}
+          optErr={props.optErr}
         />
       </Show>
       <Show when={ov().kind === "copy"}>
@@ -538,6 +552,7 @@ function NewSandboxFields(props: {
   setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
   envVars: string;
   setEnvVars: (v: string) => void;
+  optErr: string;
 }) {
   return (
     <>
@@ -583,6 +598,7 @@ function NewSandboxFields(props: {
           envVars={props.envVars}
           setEnvVars={props.setEnvVars}
           secrets
+          optErr={props.optErr}
         />
       </Show>
     </>
@@ -735,6 +751,7 @@ function OptionField(props: {
   cur: JsonObject;
   onSet: (next: JsonObject) => void;
 }) {
+  const [draft, setDraft] = createSignal("");
   const opt = () => props.opt;
   const value = () => getField(props.cur, opt().name);
   if (opt().type === "boolean") {
@@ -776,6 +793,51 @@ function OptionField(props: {
       </>
     );
   }
+  if (opt().type === "stringMap") {
+    const obj = (): JsonObject => (isJsonObject(value() ?? null) ? value() : {});
+    const keys = () => Object.keys(obj());
+    return (
+      <div class="mt-1.5">
+        <div class={label}>{opt().name}</div>
+        <For each={keys()}>
+          {(k) => (
+            <label class={label}>
+              {k()}
+              <textarea
+                class={`${field} h-16`}
+                value={String(obj()[k()] ?? "")}
+                onChange={(e) => {
+                  const next: JsonObject = { ...obj(), [k()]: e.currentTarget.value };
+                  props.onSet(setField(props.cur, opt().name, next));
+                }}
+              />
+            </label>
+          )}
+        </For>
+        <div class="mt-1 flex gap-1">
+          <input
+            class={field}
+            value={draft()}
+            placeholder="name"
+            onInput={(e) => setDraft(e.currentTarget.value)}
+          />
+          <button
+            type="button"
+            class="border border-twm-line bg-twm px-2 py-0.5 font-bold text-white"
+            onClick={() => {
+              const k = draft().trim();
+              if (!k) return;
+              const next: JsonObject = { ...obj(), [k]: "" };
+              props.onSet(setField(props.cur, opt().name, next));
+              setDraft("");
+            }}
+          >
+            add
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (opt().type === "string" || opt().type === "number") {
     return (
       <label class={label}>
@@ -815,9 +877,13 @@ function EnvironmentFields(props: {
   envVars: string;
   setEnvVars: (v: string) => void;
   secrets: boolean;
+  optErr?: string;
 }) {
   return (
     <>
+      <Show when={props.optErr}>
+        <p class="text-[12px] text-red-700">{props.optErr}</p>
+      </Show>
       <p class="text-[12px]">
         devenv is always in the Environment. Keys are not stored in the recipe.
       </p>
@@ -888,6 +954,7 @@ function TemplatesFields(props: {
   setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
   envVars: string;
   setEnvVars: (v: string) => void;
+  optErr: string;
 }) {
   const selected = () => props.templates.find((t) => t.name === props.tplName);
   const userTemplates = () => props.templates.filter((t) => !t.shipped);
@@ -928,6 +995,7 @@ function TemplatesFields(props: {
           envVars={props.envVars}
           setEnvVars={props.setEnvVars}
           secrets={false}
+          optErr={props.optErr}
         />
       </Show>
     </>

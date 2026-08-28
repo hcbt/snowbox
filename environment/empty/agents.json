@@ -1,0 +1,6 @@
+{
+  "programs": ["claude-code", "codex", "pi-coding-agent"],
+  "extraPackages": {
+    "pi-coding-agent": ["nodejs", "bun"]
+  }
+}

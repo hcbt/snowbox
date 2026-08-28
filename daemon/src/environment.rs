@@ -4,15 +4,16 @@ pub const DEFAULT_FLAKE: &str = include_str!("../../environment/empty/flake.nix"
 pub const DEFAULT_LOCK: &str = include_str!("../../environment/empty/flake.lock");
 pub const DEFAULT_HOME: &str = include_str!("../../environment/empty/home.nix");
 pub const DEFAULT_CONFIG: &str = include_str!("../../environment/empty/config.json");
-pub const SCHEMA: &str = include_str!("../../environment/empty/schema.json");
+pub const DEFAULT_AGENTS: &str = include_str!("../../environment/empty/agents.json");
 pub const DEFAULT_DUMP: &str = include_str!("../../environment/empty/dump-options.nix");
 
-const FILES: [&str; 5] = [
+const FILES: [&str; 6] = [
     "flake.nix",
     "flake.lock",
     "home.nix",
     "config.json",
     "dump-options.nix",
+    "agents.json",
 ];
 pub const CREATE_DIR: &str = "create-environment";
 
@@ -57,6 +58,8 @@ pub fn write_default(dir: &Path) -> Result<(), ActionError> {
         .map_err(|_| ActionError::Internal)?;
     std::fs::write(env_dir.join("dump-options.nix"), DEFAULT_DUMP)
         .map_err(|_| ActionError::Internal)?;
+    std::fs::write(env_dir.join("agents.json"), DEFAULT_AGENTS.trim())
+        .map_err(|_| ActionError::Internal)?;
     Ok(())
 }
 
@@ -66,6 +69,7 @@ pub fn fingerprint(dir: &Path) -> Result<String, ActionError> {
     let lock = std::fs::read(env.join("flake.lock")).map_err(|_| ActionError::Internal)?;
     let home = std::fs::read(env.join("home.nix")).map_err(|_| ActionError::Internal)?;
     let flake = std::fs::read(env.join("flake.nix")).map_err(|_| ActionError::Internal)?;
+    let agents = std::fs::read(env.join("agents.json")).unwrap_or_default();
     let mut out = Vec::new();
     out.extend_from_slice(&cfg);
     out.push(b'\n');
@@ -74,6 +78,8 @@ pub fn fingerprint(dir: &Path) -> Result<String, ActionError> {
     out.extend_from_slice(&home);
     out.push(b'\n');
     out.extend_from_slice(&flake);
+    out.push(b'\n');
+    out.extend_from_slice(&agents);
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
@@ -87,11 +93,75 @@ pub fn set_config(dir: &Path, value: &serde_json::Value) -> Result<serde_json::V
     if !value.is_object() {
         return Err(ActionError::BadRequest("config must be an object"));
     }
-    let mut value = value.clone();
-    clamp_extra_packages(&mut value);
+    let value = sanitize(&value)?;
     let raw = serde_json::to_string_pretty(&value).map_err(|_| ActionError::Internal)?;
     std::fs::write(dir.join("environment/config.json"), raw).map_err(|_| ActionError::Internal)?;
     config(dir)
+}
+
+pub fn sanitize(value: &serde_json::Value) -> Result<serde_json::Value, ActionError> {
+    if !value.is_object() {
+        return Err(ActionError::BadRequest("config must be an object"));
+    }
+    let mut value = value.clone();
+    strip_secrets(&mut value);
+    clamp_programs(&mut value);
+    clamp_extra_packages(&mut value);
+    Ok(value)
+}
+
+fn agents() -> serde_json::Value {
+    serde_json::from_str(DEFAULT_AGENTS).expect("agents json")
+}
+
+pub fn agent_names() -> Vec<String> {
+    agents()["programs"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
+}
+
+fn extra_allow(program: &str) -> Vec<String> {
+    agents()["extraPackages"][program]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
+}
+
+fn is_secret_key(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "apikey" | "token" | "password" | "secret" | "authtoken"
+    )
+}
+
+fn strip_secrets(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.retain(|k, _| !is_secret_key(k));
+            for v in map.values_mut() {
+                strip_secrets(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                strip_secrets(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn clamp_programs(value: &mut serde_json::Value) {
+    let allowed = agent_names();
+    let Some(programs) = value.get_mut("programs").and_then(|p| p.as_object_mut()) else {
+        return;
+    };
+    programs.retain(|k, _| allowed.iter().any(|a| a == k));
 }
 
 fn clamp_extra_packages(value: &mut serde_json::Value) {
@@ -102,14 +172,15 @@ fn clamp_extra_packages(value: &mut serde_json::Value) {
         let Some(obj) = cfg.as_object_mut() else {
             continue;
         };
-        if name != "pi-coding-agent" {
+        let allow = extra_allow(name);
+        if allow.is_empty() {
             obj.remove("extraPackages");
             continue;
         }
         let Some(arr) = obj.get_mut("extraPackages").and_then(|v| v.as_array_mut()) else {
             continue;
         };
-        arr.retain(|v| v.as_str().map(|s| PI_EXTRA.contains(&s)).unwrap_or(false));
+        arr.retain(|v| v.as_str().is_some_and(|s| allow.iter().any(|a| a == s)));
     }
 }
 
@@ -186,7 +257,6 @@ pub fn document(dir: &Path) -> Result<serde_json::Value, ActionError> {
 }
 
 const DROP_OPTIONS: &[&str] = &["package", "finalPackage", "enableMcpIntegration"];
-const PI_EXTRA: [&str; 2] = ["nodejs", "bun"];
 
 pub fn schema_from_hm(raw: &serde_json::Value) -> Result<serde_json::Value, ActionError> {
     let Some(programs) = raw.get("programs").and_then(|p| p.as_array()) else {
@@ -206,7 +276,7 @@ pub fn schema_from_hm(raw: &serde_json::Value) -> Result<serde_json::Value, Acti
         };
         let mut options = Vec::new();
         for opt in opts {
-            if let Some(filtered) = filter_option(opt) {
+            if let Some(filtered) = filter_option(name, opt) {
                 options.push(filtered);
             }
         }
@@ -219,7 +289,7 @@ pub fn schema_from_hm(raw: &serde_json::Value) -> Result<serde_json::Value, Acti
     Ok(serde_json::json!({ "programs": out }))
 }
 
-fn filter_option(opt: &serde_json::Value) -> Option<serde_json::Value> {
+fn filter_option(program: &str, opt: &serde_json::Value) -> Option<serde_json::Value> {
     let name = opt.get("name")?.as_str()?;
     if DROP_OPTIONS.contains(&name) {
         return None;
@@ -240,7 +310,12 @@ fn filter_option(opt: &serde_json::Value) -> Option<serde_json::Value> {
     }
     let mapped = map_type(name, &ty_l);
     let default = if name == "extraPackages" {
-        serde_json::json!(PI_EXTRA)
+        serde_json::Value::Array(
+            extra_allow(program)
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        )
     } else {
         opt.get("default")
             .cloned()
@@ -254,24 +329,8 @@ fn filter_option(opt: &serde_json::Value) -> Option<serde_json::Value> {
     }))
 }
 
-pub fn agent_schema() -> serde_json::Value {
-    static CACHE: std::sync::Mutex<Option<(String, serde_json::Value)>> =
-        std::sync::Mutex::new(None);
-    if let Ok(guard) = CACHE.lock()
-        && let Some((key, value)) = guard.as_ref()
-        && key == DEFAULT_LOCK
-    {
-        return value.clone();
-    }
-    match live_schema() {
-        Ok(value) => {
-            if let Ok(mut guard) = CACHE.lock() {
-                *guard = Some((DEFAULT_LOCK.to_string(), value.clone()));
-            }
-            value
-        }
-        Err(_) => serde_json::from_str(SCHEMA).expect("schema json"),
-    }
+pub fn load_agent_schema() -> Result<serde_json::Value, String> {
+    live_schema().map_err(|e| e.to_string())
 }
 
 fn live_schema() -> Result<serde_json::Value, ActionError> {
@@ -303,7 +362,12 @@ fn map_type(name: &str, ty: &str) -> &'static str {
     if ty.contains("int") || ty.contains("float") || ty.contains("number") {
         return "number";
     }
-    if ty.contains("json") || ty.contains("attribute set") || ty.contains("attrs") {
+    let attrs = ty.contains("attribute set") || ty.contains("attrs");
+    let textish = ty.contains("string") || ty.contains("lines") || ty.contains("path");
+    if attrs && textish && !ty.contains("package") {
+        return "stringMap";
+    }
+    if ty.contains("json") || attrs {
         return "json";
     }
     if ty.contains("path") || ty.contains("string") || ty.contains("lines") {
@@ -378,16 +442,32 @@ mod tests {
 
     #[test]
     fn schema_names_home_manager_agents() {
-        let schema: serde_json::Value = serde_json::from_str(SCHEMA).unwrap();
-        let names: Vec<&str> = schema["programs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| p["name"].as_str().unwrap())
-            .collect();
-        assert!(names.contains(&"claude-code"));
-        assert!(names.contains(&"codex"));
-        assert!(names.contains(&"pi-coding-agent"));
+        let names = agent_names();
+        assert!(names.iter().any(|n| n == "claude-code"));
+        assert!(names.iter().any(|n| n == "codex"));
+        assert!(names.iter().any(|n| n == "pi-coding-agent"));
+    }
+
+    #[test]
+    fn set_config_strips_secret_keys_from_json() {
+        let dir = tempfile::tempdir().unwrap();
+        write_default(dir.path()).unwrap();
+        let mut cfg = config(dir.path()).unwrap();
+        cfg["programs"]["pi-coding-agent"]["models"] = serde_json::json!({
+            "apiKey": "sk-live",
+            "defaultProvider": "ollama"
+        });
+        set_config(dir.path(), &cfg).unwrap();
+        let out = config(dir.path()).unwrap();
+        assert!(
+            out["programs"]["pi-coding-agent"]["models"]
+                .get("apiKey")
+                .is_none()
+        );
+        assert_eq!(
+            out["programs"]["pi-coding-agent"]["models"]["defaultProvider"],
+            "ollama"
+        );
     }
 
     #[test]
@@ -438,6 +518,7 @@ mod tests {
                     {"name": "enableMcpIntegration", "type": "boolean", "default": false, "description": "mcp", "internal": false, "readOnly": false},
                     {"name": "mcpServers", "type": "JSON value", "default": {}, "description": "mcp servers", "internal": false, "readOnly": false},
                     {"name": "keybindings", "type": "JSON value", "default": {}, "description": "keys", "internal": false, "readOnly": false},
+                    {"name": "rules", "type": "attribute set of (strings concatenated with \\n or absolute path)", "default": {}, "description": "rules", "internal": false, "readOnly": false},
                     {"name": "configDir", "type": "string", "default": "/home/snow/.pi/agent", "description": "dir", "internal": false, "readOnly": false},
                     {"name": "extraPackages", "type": "list of package", "default": [], "description": "path extras", "internal": false, "readOnly": false},
                     {"name": "memory.source", "type": "null or path", "default": null, "description": "host file", "internal": false, "readOnly": false}
@@ -457,11 +538,19 @@ mod tests {
             [
                 "enable",
                 "keybindings",
+                "rules",
                 "configDir",
                 "extraPackages",
                 "memory.source"
             ]
         );
+        let rules = opts
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["name"] == "rules")
+            .unwrap();
+        assert_eq!(rules["type"], "stringMap");
         let extra = opts
             .as_array()
             .unwrap()

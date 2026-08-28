@@ -1,8 +1,7 @@
-{ pkgs, ... }:
+{ pkgs, lib, ... }:
 let
   raw = builtins.fromJSON (builtins.readFile ./config.json);
   programs = raw.programs or { };
-  take = name: programs.${name} or { enable = false; };
   withPkgs =
     cfg:
     let
@@ -12,19 +11,20 @@ let
     // {
       extraPackages = map (n: pkgs.${n}) names;
     };
+  apply = cfg: if cfg ? extraPackages then withPkgs cfg else cfg;
 in
 {
   home.username = "snow";
   home.homeDirectory = "/home/snow";
   home.stateVersion = "26.05";
-  programs.bash.enable = true;
-  programs.bash.initExtra = ''
-    if [ -f "$HOME/.snowbox-env" ]; then
-      . "$HOME/.snowbox-env"
-    fi
-  '';
+  programs = {
+    bash.enable = true;
+    bash.initExtra = ''
+      if [ -f "$HOME/.snowbox-env" ]; then
+        . "$HOME/.snowbox-env"
+      fi
+    '';
+  }
+  // lib.mapAttrs (_: apply) programs;
   home.packages = [ pkgs.devenv ];
-  programs.claude-code = take "claude-code";
-  programs.codex = take "codex";
-  programs.pi-coding-agent = withPkgs (take "pi-coding-agent");
 }

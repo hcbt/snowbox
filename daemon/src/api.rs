@@ -37,6 +37,7 @@ pub struct AppState {
     pub sessions: crate::pty::Sessions,
     pub vmm: Option<Arc<Hypervisor>>,
     pub resume: Arc<Resume>,
+    pub agent_options: Arc<Result<serde_json::Value, String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -368,8 +369,16 @@ async fn put_template(
     Ok(Json(cfg))
 }
 
-async fn agent_options() -> Json<serde_json::Value> {
-    Json(crate::environment::agent_schema())
+async fn agent_options(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    match state.agent_options.as_ref() {
+        Ok(value) => Ok(Json(value.clone())),
+        Err(detail) => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error":"failed","detail": detail})),
+        )),
+    }
 }
 
 async fn get_environment(
@@ -737,6 +746,13 @@ mod tests {
             }),
             resume: Arc::new(crate::resume::Resume::open(dir.path().join("running.json"))),
             vmm: None,
+            agent_options: Arc::new(Ok(serde_json::json!({
+                "programs": [
+                    {"name": "claude-code", "description": "Claude Code", "options": []},
+                    {"name": "codex", "description": "Codex", "options": []},
+                    {"name": "pi-coding-agent", "description": "Pi", "options": []}
+                ]
+            }))),
         };
         (dir, state)
     }
@@ -1105,6 +1121,22 @@ mod tests {
         assert!(names.contains(&"claude-code"));
         assert!(names.contains(&"codex"));
         assert!(names.contains(&"pi-coding-agent"));
+    }
+
+    #[tokio::test]
+    async fn agent_options_failed_dump_is_unavailable() {
+        let (_dir, mut state) = harness();
+        state.agent_options = Arc::new(Err("eval failed".into()));
+        let (status, json) = send(
+            router(state),
+            authed(Request::get("http://127.0.0.1/api/v1/agent-options"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(json["error"], "failed");
+        assert_eq!(json["detail"], "eval failed");
     }
 
     #[tokio::test]

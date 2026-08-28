@@ -1,10 +1,13 @@
 { lib, options }:
 let
-  names = [
-    "claude-code"
-    "codex"
-    "pi-coding-agent"
-  ];
+  agents =
+    if builtins.pathExists ./agents.json then
+      builtins.fromJSON (builtins.readFile ./agents.json)
+    else
+      {
+        programs = [ ];
+      };
+  names = agents.programs or [ ];
   flatten =
     prefix: set:
     lib.concatLists (

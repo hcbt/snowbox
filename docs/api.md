@@ -37,7 +37,7 @@ Reset puts the Sandbox back to Create: restores the Environment as it was at Cre
 | `POST` | `/templates` | Save the current Environment as a Template. Body `{"name":"work","sandbox":"<id>"}`. `201`. Cannot overwrite a shipped Template. Overwrites a user-saved name. |
 | `GET` | `/templates/{name}` | That Template’s `config.json`. `404` if missing. |
 | `PUT` | `/templates/{name}` | Replace that Template’s `config.json`. Cannot overwrite a shipped Template. |
-| `GET` | `/agent-options` | home-manager Agent option schema the Environment form renders. Evaluated from the Environment pin; unusable options (`package`, MCP wiring, internal) are dropped. |
+| `GET` | `/agent-options` | home-manager Agent option schema the Environment form renders. Dumped once when the Daemon starts from the Environment pin. Unusable options (`package`, MCP wiring, internal) are dropped. Dump failed → `503` `failed`. |
 | `GET` | `/sandboxes/{id}` | One record. `404` if missing |
 | `PATCH` | `/sandboxes/{id}` | Update Limits. Body `{"limits":{"cpu":4,"ram":4294967296,"disk":34359738368}}` — any field optional. Applied on the next start. `404` if missing |
 | `POST` | `/sandboxes/{id}/start` | `stopped` → `running`. Restores machine state when present, otherwise boots. `409` if already running. No hypervisor → `503` `failed` |

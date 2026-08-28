@@ -95,6 +95,16 @@ async fn run_daemon() -> Result<()> {
         eprintln!("runtime missing (build guest, or set SNOWBOX_RUNTIME)");
     }
     eprintln!("cache {}", cache.root().display());
+    let agent_options = match environment::load_agent_schema() {
+        Ok(value) => {
+            eprintln!("agent options ready");
+            Arc::new(Ok(value))
+        }
+        Err(e) => {
+            eprintln!("agent options failed: {e}");
+            Arc::new(Err(e))
+        }
+    };
     let state = api::AppState {
         token,
         store: Arc::new(store),
@@ -108,6 +118,7 @@ async fn run_daemon() -> Result<()> {
         sessions: pty::Sessions::default(),
         vmm,
         resume: Arc::new(resume::Resume::open(data.join("running.json"))),
+        agent_options,
     };
     let app = with_ui(api::router(state.clone()), state.clone()).layer(
         middleware::from_fn_with_state(state.clone(), auth::attach_session),
