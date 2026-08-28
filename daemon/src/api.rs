@@ -494,7 +494,7 @@ fn boot_claimed(
     let dir = store.dir(id);
     let hatching = !dir.join("disk").join("root.raw").is_file() && !dir.join(SAVE_NAME).is_file();
     if hatching && !vmm.ready_snapshot_exists(store.root()) {
-        log.line("ready disk: none; cold boot");
+        log.line("ready snapshot: none");
     }
     log.line(format!("sandbox {id}: starting hypervisor"));
     let started = vmm.start(id, &dir, sandbox.limits);
@@ -526,18 +526,6 @@ fn boot_claimed(
         "sandbox {id}: agent {}ms",
         t1.elapsed().as_millis()
     ));
-    if hatching {
-        if let Err(e) = vmm.capture_ready(id, &dir) {
-            log.line(format!("ready disk: capture failed ({e})"));
-        } else if vmm.ready_snapshot_exists(store.root()) {
-            log.line("ready snapshot: ready");
-        }
-    }
-    if dir.join(crate::vmm::HATCHED).is_file() {
-        let _ = crate::agent::reset_dir(vmm, id, "/workspace");
-        let _ = crate::agent::reset_dir(vmm, id, "/home/snow");
-        forget_hatch_applied(&dir);
-    }
     crate::agent::tar_in(vmm, id, "/workspace", &dir.join("workspace"))
         .map_err(ActionError::Failed)?;
     let _ = crate::agent::tar_in(vmm, id, "/home/snow", &dir.join("home"));
@@ -547,6 +535,13 @@ fn boot_claimed(
         "sandbox {id}: environment {}ms",
         t2.elapsed().as_millis()
     ));
+    if hatching {
+        if let Err(e) = vmm.capture_ready(id, &dir) {
+            log.line(format!("ready snapshot: capture failed ({e})"));
+        } else if vmm.ready_snapshot_exists(store.root()) {
+            log.line("ready snapshot: ready");
+        }
+    }
     log.line(format!(
         "sandbox {id}: start {}ms",
         t0.elapsed().as_millis()
@@ -562,19 +557,6 @@ fn apply_env(
     log: &crate::progress::Progress,
 ) -> Result<(), ActionError> {
     apply_env_at(&store.dir(id), cache, vmm, id, log)
-}
-
-/// Ready-snapshot hatch RESET of /home/snow leaves environment.applied matching
-/// the stamp, so apply_env_at would skip profile. Drop the stamp so a New
-/// Sandbox always activates Environment (devenv on PATH).
-fn forget_hatch_applied(dir: &std::path::Path) -> bool {
-    let hatched = dir.join(crate::vmm::HATCHED);
-    if !hatched.is_file() {
-        return false;
-    }
-    let _ = std::fs::remove_file(dir.join("environment.applied"));
-    let _ = std::fs::remove_file(&hatched);
-    true
 }
 
 fn apply_env_at(
@@ -1473,16 +1455,5 @@ mod tests {
         assert_eq!(json["error"], "failed");
         assert_eq!(json["detail"], "no hypervisor");
         assert_eq!(state.store.get(id).unwrap().state, SandboxState::Running);
-    }
-
-    #[test]
-    fn hatch_drops_environment_applied() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("environment.applied"), "stamp").unwrap();
-        std::fs::write(dir.path().join(crate::vmm::HATCHED), b"").unwrap();
-        assert!(forget_hatch_applied(dir.path()));
-        assert!(!dir.path().join("environment.applied").exists());
-        assert!(!dir.path().join(crate::vmm::HATCHED).exists());
-        assert!(!forget_hatch_applied(dir.path()));
     }
 }

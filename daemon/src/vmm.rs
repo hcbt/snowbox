@@ -228,6 +228,7 @@ fn snapshot_complete(dir: &Path) -> bool {
         && dir.join(SAVE_NAME).is_file()
         && dir.join("machine.ident").is_file()
         && dir.join("mac.id").is_file()
+        && dir.join("environment.applied").is_file()
 }
 
 fn snapshot_matches_runtime(dir: &Path, runtime: &Runtime) -> bool {
@@ -269,7 +270,13 @@ fn install_ready(sandbox_dir: &Path, runtime: &Runtime) {
             return;
         }
     }
-    for name in [SAVE_NAME, "machine.ident", "mac.id", "runtime.src"] {
+    for name in [
+        SAVE_NAME,
+        "machine.ident",
+        "mac.id",
+        "runtime.src",
+        "environment.applied",
+    ] {
         let src = ready.join(name);
         if src.is_file() {
             let _ = std::fs::copy(&src, sandbox_dir.join(name));
@@ -307,14 +314,20 @@ fn bake_ready(sandbox_dir: &Path, runtime: &Runtime) {
         let _ = std::fs::remove_dir_all(&tmp);
         return;
     }
-    for name in [SAVE_NAME, "machine.ident", "mac.id", "runtime.src"] {
+    for name in [
+        SAVE_NAME,
+        "machine.ident",
+        "mac.id",
+        "runtime.src",
+        "environment.applied",
+    ] {
         let src = sandbox_dir.join(name);
         if src.is_file() {
             let _ = std::fs::copy(&src, tmp.join(name));
         }
     }
     if !snapshot_complete(&tmp) {
-        eprintln!("ready snapshot: skip bake (missing save, ident, or MAC)");
+        eprintln!("ready snapshot: skip bake (missing save, ident, MAC, or Environment)");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
     }
@@ -480,6 +493,7 @@ mod tests {
         std::fs::write(src.join("disk").join("root.raw"), b"booted!!").unwrap();
         std::fs::write(src.join(SAVE_NAME), b"save").unwrap();
         std::fs::write(src.join("machine.ident"), b"ident").unwrap();
+        std::fs::write(src.join("environment.applied"), b"stamp").unwrap();
         disk::write_mac_id(&src, Uuid::from_u128(99));
         stamp_runtime(&src, &rt.rootfs);
         bake_ready(&src, rt);
@@ -615,7 +629,10 @@ mod tests {
             b"booted!!"
         );
         assert!(b.join(HATCHED).is_file());
-        assert!(!b.join("environment.applied").exists());
+        assert_eq!(
+            std::fs::read(b.join("environment.applied")).unwrap(),
+            b"stamp"
+        );
         assert!(ready_dir(&src, &rt).join(SAVE_NAME).is_file());
     }
 
@@ -653,6 +670,7 @@ mod tests {
         let id = Uuid::from_u128(11);
         hv.start(id, &sb, limits()).unwrap();
         std::fs::write(sb.join("machine.ident"), b"ident").unwrap();
+        std::fs::write(sb.join("environment.applied"), b"stamp").unwrap();
         hv.capture_ready(id, &sb).unwrap();
         assert_eq!(*fake.pauses.lock().unwrap(), vec![id]);
         assert_eq!(*fake.saves.lock().unwrap(), vec![id]);
