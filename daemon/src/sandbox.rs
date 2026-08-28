@@ -262,8 +262,7 @@ impl Store {
         let _ = self.get(id)?;
         let dir = self.dir(id);
         if dir.exists() {
-            make_deletable(&dir)
-                .map_err(|e| ActionError::Failed(format!("destroy disk: {e}")))?;
+            make_deletable(&dir).map_err(|e| ActionError::Failed(format!("destroy disk: {e}")))?;
             fs::remove_dir_all(&dir)
                 .map_err(|e| ActionError::Failed(format!("destroy disk: {e}")))?;
         }
