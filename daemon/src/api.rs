@@ -906,7 +906,7 @@ mod tests {
         );
         assert_eq!(
             created["limits"]["disk"].as_u64(),
-            Some(16 * 1024 * 1024 * 1024)
+            Some(8 * 1024 * 1024 * 1024)
         );
 
         let (status, created) = send(
@@ -928,7 +928,7 @@ mod tests {
         );
         assert_eq!(
             created["limits"]["disk"].as_u64(),
-            Some(16 * 1024 * 1024 * 1024)
+            Some(8 * 1024 * 1024 * 1024)
         );
 
         let id = created["id"].as_str().unwrap();

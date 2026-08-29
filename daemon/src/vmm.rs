@@ -70,7 +70,7 @@ impl Hypervisor {
         let own_save = sandbox_dir.join(SAVE_NAME);
         let has_disk = sandbox_dir.join("disk").join("root.raw").is_file();
         if !own_save.exists() && !has_disk {
-            install_ready(sandbox_dir, &self.runtime);
+            install_ready(sandbox_dir, &self.runtime, limits.disk);
         }
         let mac_id = disk::read_mac_id(sandbox_dir, id);
         if own_save.exists() {
@@ -127,15 +127,25 @@ impl Hypervisor {
     /// drop the save next to this disk so later Stop writes a fresh one.
     /// Later New Sandboxes restore that clone instead of cold-booting.
     pub fn capture_ready(&self, id: Uuid, sandbox_dir: &Path) -> Result<(), String> {
+        let src_len = std::fs::metadata(sandbox_dir.join("disk").join("root.raw"))
+            .ok()
+            .map(|m| m.len());
         crate::ready::ensure(
-            || snapshot_complete(&ready_dir(sandbox_dir, &self.runtime)),
+            || {
+                let ready = ready_dir(sandbox_dir, &self.runtime);
+                snapshot_complete(&ready) && src_len.is_none_or(|n| snapshot_fits(&ready, n))
+            },
             || self.capture_ready_once(id, sandbox_dir),
         );
         Ok(())
     }
 
     fn capture_ready_once(&self, id: Uuid, sandbox_dir: &Path) -> Result<(), String> {
-        if snapshot_complete(&ready_dir(sandbox_dir, &self.runtime)) {
+        let ready = ready_dir(sandbox_dir, &self.runtime);
+        let src_len = std::fs::metadata(sandbox_dir.join("disk").join("root.raw"))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        if snapshot_complete(&ready) && snapshot_fits(&ready, src_len) {
             return Ok(());
         }
         self.engine.pause(id)?;
@@ -231,6 +241,12 @@ fn snapshot_complete(dir: &Path) -> bool {
         && dir.join("environment.applied").is_file()
 }
 
+fn snapshot_fits(dir: &Path, limit: u64) -> bool {
+    std::fs::metadata(dir.join("root.raw"))
+        .map(|m| m.len() <= limit)
+        .unwrap_or(false)
+}
+
 fn snapshot_matches_runtime(dir: &Path, runtime: &Runtime) -> bool {
     let stamped = std::fs::read_to_string(dir.join("runtime.src")).unwrap_or_default();
     let stamped = stamped.trim();
@@ -247,7 +263,7 @@ fn snapshot_matches_runtime(dir: &Path, runtime: &Runtime) -> bool {
     stamped == current.to_string_lossy()
 }
 
-fn install_ready(sandbox_dir: &Path, runtime: &Runtime) {
+fn install_ready(sandbox_dir: &Path, runtime: &Runtime, limit: u64) {
     let ready = ready_dir(sandbox_dir, runtime);
     if !ready.join("root.raw").is_file() {
         eprintln!("ready snapshot: none");
@@ -256,6 +272,10 @@ fn install_ready(sandbox_dir: &Path, runtime: &Runtime) {
     if !snapshot_matches_runtime(&ready, runtime) {
         eprintln!("ready snapshot: stale userspace; dropping");
         let _ = std::fs::remove_dir_all(&ready);
+        return;
+    }
+    if !snapshot_fits(&ready, limit) {
+        eprintln!("ready snapshot: disk exceeds Limit; cold boot");
         return;
     }
     let disk_dir = sandbox_dir.join("disk");
@@ -287,10 +307,13 @@ fn install_ready(sandbox_dir: &Path, runtime: &Runtime) {
 
 fn bake_ready(sandbox_dir: &Path, runtime: &Runtime) {
     let dest = ready_dir(sandbox_dir, runtime);
-    if snapshot_complete(&dest) {
-        return;
-    }
     let src_disk = sandbox_dir.join("disk").join("root.raw");
+    if snapshot_complete(&dest) {
+        let src_len = std::fs::metadata(&src_disk).map(|m| m.len()).unwrap_or(0);
+        if snapshot_fits(&dest, src_len) {
+            return;
+        }
+    }
     if !src_disk.is_file() {
         return;
     }
@@ -487,10 +510,14 @@ mod tests {
     }
 
     fn primed_booted(root: &Path, rt: &Runtime) -> PathBuf {
+        primed_booted_disk(root, rt, b"booted!!")
+    }
+
+    fn primed_booted_disk(root: &Path, rt: &Runtime, bytes: &[u8]) -> PathBuf {
         let src = root.join("src");
         crate::environment::write_default(&src).unwrap();
         std::fs::create_dir_all(src.join("disk")).unwrap();
-        std::fs::write(src.join("disk").join("root.raw"), b"booted!!").unwrap();
+        std::fs::write(src.join("disk").join("root.raw"), bytes).unwrap();
         std::fs::write(src.join(SAVE_NAME), b"save").unwrap();
         std::fs::write(src.join("machine.ident"), b"ident").unwrap();
         std::fs::write(src.join("environment.applied"), b"stamp").unwrap();
@@ -813,6 +840,61 @@ mod tests {
                 .unwrap()
                 .len(),
             256
+        );
+    }
+
+    #[test]
+    fn ready_disk_bigger_than_limit_does_not_fail_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(dir.path());
+        let fake = Fake::new();
+        let hv = Hypervisor::wrap(rt.clone(), fake.clone());
+        primed_booted_disk(dir.path(), &rt, &vec![0u8; 200]);
+        let b = dir.path().join("b");
+        crate::environment::write_default(&b).unwrap();
+        let small = Limits {
+            cpu: 1,
+            ram: 512 * 1024 * 1024,
+            disk: 100,
+        };
+        assert_eq!(
+            hv.start(Uuid::from_u128(16), &b, small).unwrap(),
+            StartKind::Cold
+        );
+        assert!(fake.restores.lock().unwrap().is_empty());
+        assert_eq!(
+            std::fs::metadata(b.join("disk").join("root.raw"))
+                .unwrap()
+                .len(),
+            100
+        );
+        assert!(!b.join(SAVE_NAME).exists());
+    }
+
+    #[test]
+    fn capture_replaces_a_ready_disk_that_exceeds_this_sandbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(dir.path());
+        let fake = Fake::new();
+        let hv = Hypervisor::wrap(rt.clone(), fake.clone());
+        primed_booted_disk(dir.path(), &rt, &vec![0u8; 200]);
+        let sb = dir.path().join("sb");
+        crate::environment::write_default(&sb).unwrap();
+        let small = Limits {
+            cpu: 1,
+            ram: 512 * 1024 * 1024,
+            disk: 100,
+        };
+        let id = Uuid::from_u128(17);
+        hv.start(id, &sb, small).unwrap();
+        std::fs::write(sb.join("machine.ident"), b"ident").unwrap();
+        std::fs::write(sb.join("environment.applied"), b"stamp").unwrap();
+        hv.capture_ready(id, &sb).unwrap();
+        assert_eq!(
+            std::fs::metadata(ready_dir(&sb, &rt).join("root.raw"))
+                .unwrap()
+                .len(),
+            100
         );
     }
 }
