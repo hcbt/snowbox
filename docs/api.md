@@ -92,7 +92,7 @@ The Canvas is a client of this API. Layout is Host-side JSON the Daemon persists
 | Method | Path | Meaning |
 | --- | --- | --- |
 | `GET` | `/layout` | Windows and Icon Manager. |
-| `PUT` | `/layout` | Replace Layout (geometry, iconify, Icon Manager). |
+| `PUT` | `/layout` | Replace Layout (geometry, iconify, Icon Manager, log Window). |
 | `POST` | `/sandboxes/{id}/windows` | Open a Window on that Sandbox. `201` |
 | `DELETE` | `/windows/{id}` | Close. Ends that shell. `204` |
 | `GET` | `/windows/{id}/pty` | WebSocket. Binary PTY I/O. `409` if the Sandbox is not running. Upgrade requires `Origin` `http://127.0.0.1:<port>` or `http://localhost:<port>` for this Daemon; missing or wrong Origin → `403`. |
@@ -114,6 +114,7 @@ Layout object:
       "iconified": false
     }
   ],
-  "icon_manager": { "x": 8, "y": 8, "w": 200, "h": 240, "visible": true }
+  "icon_manager": { "x": 8, "y": 8, "w": 200, "h": 240, "visible": true },
+  "log": { "x": 240, "y": 72, "w": 560, "h": 280, "visible": false }
 }
 ```

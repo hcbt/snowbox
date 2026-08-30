@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal, onSettled } from "solid-js";
+import { For, Show, createEffect, createSignal, flush, onSettled } from "solid-js";
 import { Term } from "./term";
 import { Frame } from "./frame";
 import { RootMenu } from "./menu";
@@ -7,6 +7,15 @@ import { overlayZ, placeOverlay, type Overlay } from "./overlay";
 import { api, type Layout, type Sandbox, type WindowRec } from "./api";
 import { sandboxesWithoutWindows } from "./sandbox-icons";
 import { menuHit, type MenuHit } from "./menu-target";
+import {
+  applyFetchedLayout,
+  defaultLayout,
+  defaultLog,
+  normalizeLayout,
+  readCachedLayout,
+  sameLayout,
+  writeCachedLayout,
+} from "./layout-sync";
 
 function focusTerm(id: string): void {
   const el = document.querySelector(`[data-win="${id}"] textarea.xterm-helper-textarea`);
@@ -16,43 +25,32 @@ function focusTerm(id: string): void {
 }
 
 export function App() {
+  const cached = readCachedLayout();
   const [sandboxes, setSandboxes] = createSignal<Sandbox[]>([]);
-  const [layout, setLayout] = createSignal<Layout>({
-    windows: [],
-    icon_manager: { x: 8, y: 8, w: 200, h: 240, visible: true },
-  });
+  const [layout, setLayout] = createSignal<Layout>(cached ?? defaultLayout());
   const [focus, setFocus] = createSignal<string | null>(null);
   const [menu, setMenu] = createSignal<MenuHit | null>(null);
   const [overlay, setOverlay] = createSignal<Overlay | null>(null);
   const [status, setStatus] = createSignal("");
   const [busy, setBusy] = createSignal(false);
-  const [ready, setReady] = createSignal(false);
-  const [logOpen, setLogOpen] = createSignal(false);
-  const [logX, setLogX] = createSignal(240);
-  const [logY, setLogY] = createSignal(72);
-  const [logW, setLogW] = createSignal(560);
-  const [logH, setLogH] = createSignal(280);
+  const [ready, setReady] = createSignal(cached !== null);
+  const [interacting, setInteracting] = createSignal(false);
+
+  const commit = (next: Layout) => {
+    setLayout(next);
+    writeCachedLayout(next);
+  };
+
+  const logRec = () => layout().log ?? defaultLog();
 
   const refresh = async () => {
     const [s, l] = await Promise.all([api.sandboxes(), api.layout()]);
     setSandboxes(s.sandboxes);
     const ids = new Set(s.sandboxes.map((b) => b.id));
-    const windows = l.windows.filter((w) => ids.has(w.sandbox));
-    const im = l.icon_manager;
-    const next = {
-      ...l,
-      windows,
-      icon_manager: {
-        x: im.x,
-        y: im.y,
-        w: im.w > 0 ? im.w : 200,
-        h: im.h > 0 ? im.h : 240,
-        visible: im.visible,
-      },
-    };
-    setLayout(next);
+    const next = applyFetchedLayout(layout(), l, ids, interacting());
+    if (!sameLayout(layout(), next)) commit(next);
     setReady(true);
-    if (windows.length !== l.windows.length) {
+    if (!interacting() && !sameLayout(next, normalizeLayout(l, ids))) {
       await api.saveLayout(next);
     }
   };
@@ -70,9 +68,9 @@ export function App() {
 
   const save = async (next: Layout) => {
     if (!ready()) return;
-    setLayout(next);
+    commit(next);
     try {
-      setLayout(await api.saveLayout(next));
+      await api.saveLayout(next);
     } catch (e) {
       setStatus(String(e));
     }
@@ -82,9 +80,17 @@ export function App() {
     const next: Layout = {
       ...layout(),
       windows: layout().windows.map((w) => (w.id === id ? { ...w, ...patch } : w)),
+      log: logRec(),
     };
-    setLayout(next);
-    if (persist) save(next);
+    commit(next);
+    if (persist) void save(next);
+  };
+
+  const beginGeom = () => setInteracting(true);
+  const endGeom = () => {
+    setInteracting(false);
+    flush();
+    void save(layout());
   };
 
   const raise = (id: string) => {
@@ -99,7 +105,11 @@ export function App() {
 
   const run = async (fn: () => Promise<void>, done = "", log = false) => {
     if (busy()) return false;
-    if (log) setLogOpen(true);
+    if (log) {
+      const next = { ...layout(), log: { ...logRec(), visible: true } };
+      commit(next);
+      void save(next);
+    }
     setBusy(true);
     setStatus("");
     try {
@@ -135,43 +145,49 @@ export function App() {
         if (e.target === e.currentTarget) setMenu(null);
       }}
     >
-      <IconManager
-        layout={layout()}
-        sandboxes={sandboxes()}
-        focus={focus()}
-        live={live}
-        busy={busy()}
-        openMenu={openMenu}
-        patchWin={patchWin}
-        raise={raise}
-        run={run}
-        patchIcon={(patch) =>
-          setLayout({
-            ...layout(),
-            icon_manager: { ...layout().icon_manager, ...patch },
-          })
-        }
-        saveIcon={() => save(layout())}
-        hide={() =>
-          save({
-            ...layout(),
-            icon_manager: { ...layout().icon_manager, visible: false },
-          })
-        }
-      />
-      <CanvasWindows
-        layout={layout()}
-        sandboxes={sandboxes()}
-        focus={focus()}
-        live={live}
-        busy={busy()}
-        openMenu={openMenu}
-        patchWin={patchWin}
-        raise={raise}
-        run={run}
-        save={() => save(layout())}
-        onEnvironment={(id) => setOverlay({ kind: "environment", id, ...placeOverlay() })}
-      />
+      <Show when={ready()}>
+        <IconManager
+          layout={layout()}
+          sandboxes={sandboxes()}
+          focus={focus()}
+          live={live}
+          busy={busy()}
+          openMenu={openMenu}
+          patchWin={patchWin}
+          raise={raise}
+          run={run}
+          beginGeom={beginGeom}
+          endGeom={endGeom}
+          patchIcon={(patch) =>
+            commit({
+              ...layout(),
+              icon_manager: { ...layout().icon_manager, ...patch },
+              log: logRec(),
+            })
+          }
+          hide={() =>
+            void save({
+              ...layout(),
+              icon_manager: { ...layout().icon_manager, visible: false },
+              log: logRec(),
+            })
+          }
+        />
+        <CanvasWindows
+          layout={layout()}
+          sandboxes={sandboxes()}
+          focus={focus()}
+          live={live}
+          busy={busy()}
+          openMenu={openMenu}
+          patchWin={patchWin}
+          raise={raise}
+          run={run}
+          beginGeom={beginGeom}
+          endGeom={endGeom}
+          onEnvironment={(id) => setOverlay({ kind: "environment", id, ...placeOverlay() })}
+        />
+      </Show>
       <Show when={menu()}>
         {(hit) => (
           <AppMenu
@@ -210,21 +226,17 @@ export function App() {
           />
         )}
       </Show>
-      <Show when={logOpen()}>
+      <Show when={ready() && logRec().visible}>
         <LogWindow
-          x={logX()}
-          y={logY()}
-          w={logW()}
-          h={logH()}
-          onMove={(x, y) => {
-            setLogX(x);
-            setLogY(y);
-          }}
-          onResize={(w, h) => {
-            setLogW(w);
-            setLogH(h);
-          }}
-          onClose={() => setLogOpen(false)}
+          x={logRec().x}
+          y={logRec().y}
+          w={logRec().w}
+          h={logRec().h}
+          onMoveStart={beginGeom}
+          onMove={(x, y) => commit({ ...layout(), log: { ...logRec(), x, y } })}
+          onResize={(w, h) => commit({ ...layout(), log: { ...logRec(), w, h } })}
+          onMoveEnd={endGeom}
+          onClose={() => void save({ ...layout(), log: { ...logRec(), visible: false } })}
         />
       </Show>
       <StatusLine busy={busy()} status={status()} />
@@ -237,8 +249,10 @@ function LogWindow(props: {
   y: number;
   w: number;
   h: number;
+  onMoveStart: () => void;
   onMove: (x: number, y: number) => void;
   onResize: (w: number, h: number) => void;
+  onMoveEnd: () => void;
   onClose: () => void;
 }) {
   const [lines, setLines] = createSignal<string[]>([]);
@@ -270,8 +284,10 @@ function LogWindow(props: {
       w={props.w}
       h={props.h}
       z={overlayZ}
+      onMoveStart={props.onMoveStart}
       onMove={props.onMove}
       onResize={props.onResize}
+      onMoveEnd={props.onMoveEnd}
       onClose={props.onClose}
     >
       <div
@@ -310,8 +326,9 @@ function IconManager(props: {
   patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
   raise: (id: string) => void;
   run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
+  beginGeom: () => void;
+  endGeom: () => void;
   patchIcon: (patch: { x?: number; y?: number; w?: number; h?: number }) => void;
-  saveIcon: () => void;
   hide: () => void;
 }) {
   const im = () => props.layout.icon_manager;
@@ -324,9 +341,10 @@ function IconManager(props: {
         w={im().w}
         h={im().h}
         z={99990}
+        onMoveStart={props.beginGeom}
         onMove={(x, y) => props.patchIcon({ x, y })}
         onResize={(w, h) => props.patchIcon({ w, h })}
-        onMoveEnd={props.saveIcon}
+        onMoveEnd={props.endGeom}
         onClose={props.hide}
         onContextMenu={(e) => props.openMenu(e)}
       >
@@ -400,7 +418,8 @@ function CanvasWindows(props: {
   patchWin: (id: string, patch: Partial<WindowRec>, persist?: boolean) => void;
   raise: (id: string) => void;
   run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
-  save: () => void;
+  beginGeom: () => void;
+  endGeom: () => void;
   onEnvironment: (id: string) => void;
 }) {
   return (
@@ -422,8 +441,9 @@ function CanvasWindows(props: {
               }
             }}
             onContextMenu={(e) => props.openMenu(e, { windowId: w().id })}
+            onMoveStart={props.beginGeom}
             onMove={(x, y) => props.patchWin(w().id, { x, y })}
-            onMoveEnd={props.save}
+            onMoveEnd={props.endGeom}
             onResize={(nw, nh) => props.patchWin(w().id, { w: nw, h: nh })}
             onIconify={() => props.patchWin(w().id, { iconified: true }, true)}
             onEnvironment={() => props.onEnvironment(w().sandbox)}

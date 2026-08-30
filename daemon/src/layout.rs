@@ -35,6 +35,20 @@ pub struct IconManager {
     pub visible: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LogWindow {
+    #[serde(default = "default_log_x")]
+    pub x: i32,
+    #[serde(default = "default_log_y")]
+    pub y: i32,
+    #[serde(default = "default_log_w")]
+    pub w: u32,
+    #[serde(default = "default_log_h")]
+    pub h: u32,
+    #[serde(default)]
+    pub visible: bool,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -45,6 +59,22 @@ fn default_icon_w() -> u32 {
 
 fn default_icon_h() -> u32 {
     240
+}
+
+fn default_log_x() -> i32 {
+    240
+}
+
+fn default_log_y() -> i32 {
+    72
+}
+
+fn default_log_w() -> u32 {
+    560
+}
+
+fn default_log_h() -> u32 {
+    280
 }
 
 impl Default for IconManager {
@@ -59,12 +89,26 @@ impl Default for IconManager {
     }
 }
 
+impl Default for LogWindow {
+    fn default() -> Self {
+        Self {
+            x: default_log_x(),
+            y: default_log_y(),
+            w: default_log_w(),
+            h: default_log_h(),
+            visible: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Layout {
     #[serde(default)]
     pub windows: Vec<Window>,
     #[serde(default)]
     pub icon_manager: IconManager,
+    #[serde(default)]
+    pub log: LogWindow,
 }
 
 impl Default for Layout {
@@ -72,6 +116,7 @@ impl Default for Layout {
         Self {
             windows: Vec::new(),
             icon_manager: IconManager::default(),
+            log: LogWindow::default(),
         }
     }
 }
@@ -232,5 +277,30 @@ mod tests {
         assert_eq!(im.w, 200);
         assert_eq!(im.h, 240);
         assert!(im.visible);
+    }
+
+    #[test]
+    fn log_missing_gets_defaults() {
+        let layout: Layout = serde_json::from_str(r#"{"windows":[]}"#).unwrap();
+        assert!(!layout.log.visible);
+        assert_eq!(layout.log.x, 240);
+        assert_eq!(layout.log.y, 72);
+        assert_eq!(layout.log.w, 560);
+        assert_eq!(layout.log.h, 280);
+    }
+
+    #[test]
+    fn log_visible_survives_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        let store = LayoutStore::open(&path).unwrap();
+        let mut layout = store.get();
+        layout.log.visible = true;
+        layout.log.x = 16;
+        store.put(layout).unwrap();
+        drop(store);
+        let store = LayoutStore::open(&path).unwrap();
+        assert!(store.get().log.visible);
+        assert_eq!(store.get().log.x, 16);
     }
 }

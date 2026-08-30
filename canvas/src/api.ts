@@ -48,9 +48,18 @@ export type WindowRec = {
   iconified: boolean;
 };
 
+export type LogRec = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  visible: boolean;
+};
+
 export type Layout = {
   windows: WindowRec[];
   icon_manager: { x: number; y: number; w: number; h: number; visible: boolean };
+  log?: LogRec;
 };
 
 declare global {

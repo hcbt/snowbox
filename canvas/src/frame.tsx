@@ -10,6 +10,7 @@ export function Frame(props: {
   h?: number;
   dataWin?: string;
   onMove: (x: number, y: number) => void;
+  onMoveStart?: () => void;
   onMoveEnd?: () => void;
   onResize?: (w: number, h: number) => void;
   onIconify?: () => void;
@@ -19,32 +20,57 @@ export function Frame(props: {
   onContextMenu?: (e: MouseEvent) => void;
   children: JSX.Element;
 }) {
+  let root: HTMLDivElement | undefined;
   const drag = (e: MouseEvent, kind: "move" | "resize" | "resize-e" | "resize-s") => {
     e.preventDefault();
     e.stopPropagation();
     props.onMouseDown?.();
+    props.onMoveStart?.();
     const startX = e.clientX;
     const startY = e.clientY;
     const ox = props.x;
     const oy = props.y;
     const ow = props.w ?? 0;
     const oh = props.h ?? 0;
+    const sized = (dx: number, dy: number) => ({
+      w: Math.max(180, kind === "resize-s" ? ow : ow + dx),
+      h: Math.max(80, kind === "resize-e" ? oh : oh + dy),
+    });
     const move = (ev: MouseEvent) => {
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
+      if (!root) return;
       if (kind === "move") {
-        props.onMove(ox + dx, oy + dy);
+        root.style.transform = `translate(${dx}px, ${dy}px)`;
         return;
       }
       if (!props.onResize) return;
-      props.onResize(
-        Math.max(180, kind === "resize-s" ? ow : ow + dx),
-        Math.max(80, kind === "resize-e" ? oh : oh + dy),
-      );
+      const next = sized(dx, dy);
+      if (kind !== "resize-s") root.style.width = `${next.w}px`;
+      if (kind !== "resize-e") root.style.height = `${next.h}px`;
     };
-    const up = () => {
+    const up = (ev: MouseEvent) => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (kind === "move") {
+        const nx = ox + dx;
+        const ny = oy + dy;
+        if (root) {
+          root.style.left = `${nx}px`;
+          root.style.top = `${ny}px`;
+          root.style.transform = "";
+        }
+        props.onMove(nx, ny);
+      } else if (props.onResize) {
+        const next = sized(dx, dy);
+        if (root) {
+          root.style.width = `${next.w}px`;
+          root.style.height = `${next.h}px`;
+        }
+        props.onResize(next.w, next.h);
+      }
       props.onMoveEnd?.();
     };
     window.addEventListener("mousemove", move);
@@ -53,6 +79,9 @@ export function Frame(props: {
 
   return (
     <div
+      ref={(el) => {
+        root = el;
+      }}
       class="absolute flex min-h-20 min-w-[180px] flex-col"
       data-win={props.dataWin}
       style={{
