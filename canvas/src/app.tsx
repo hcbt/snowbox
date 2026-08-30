@@ -12,9 +12,14 @@ import {
   defaultLayout,
   defaultLog,
   normalizeLayout,
-  readCachedLayout,
+  readCachedSnap,
   sameLayout,
+  sameLines,
+  sameSandboxes,
+  sandboxLive,
   writeCachedLayout,
+  writeCachedLogLines,
+  writeCachedSandboxes,
 } from "./layout-sync";
 
 function focusTerm(id: string): void {
@@ -25,9 +30,9 @@ function focusTerm(id: string): void {
 }
 
 export function App() {
-  const cached = readCachedLayout();
-  const [sandboxes, setSandboxes] = createSignal<Sandbox[]>([]);
-  const [layout, setLayout] = createSignal<Layout>(cached ?? defaultLayout());
+  const cached = readCachedSnap();
+  const [sandboxes, setSandboxes] = createSignal<Sandbox[]>(cached?.sandboxes ?? []);
+  const [layout, setLayout] = createSignal<Layout>(cached?.layout ?? defaultLayout());
   const [focus, setFocus] = createSignal<string | null>(null);
   const [menu, setMenu] = createSignal<MenuHit | null>(null);
   const [overlay, setOverlay] = createSignal<Overlay | null>(null);
@@ -35,6 +40,7 @@ export function App() {
   const [busy, setBusy] = createSignal(false);
   const [ready, setReady] = createSignal(cached !== null);
   const [interacting, setInteracting] = createSignal(false);
+  const [logLines, setLogLines] = createSignal<string[]>(cached?.logLines ?? []);
 
   const commit = (next: Layout) => {
     setLayout(next);
@@ -45,7 +51,10 @@ export function App() {
 
   const refresh = async () => {
     const [s, l] = await Promise.all([api.sandboxes(), api.layout()]);
-    setSandboxes(s.sandboxes);
+    if (!sameSandboxes(sandboxes(), s.sandboxes)) {
+      setSandboxes(s.sandboxes);
+      writeCachedSandboxes(s.sandboxes);
+    }
     const ids = new Set(s.sandboxes.map((b) => b.id));
     const next = applyFetchedLayout(layout(), l, ids, interacting());
     if (!sameLayout(layout(), next)) commit(next);
@@ -55,8 +64,7 @@ export function App() {
     }
   };
 
-  const live = (sandboxId: string) =>
-    sandboxes().some((s) => s.id === sandboxId && s.state === "running");
+  const live = (sandboxId: string) => sandboxLive(sandboxes(), sandboxId);
 
   onSettled(() => {
     refresh().catch((e) => setStatus(String(e)));
@@ -237,6 +245,12 @@ export function App() {
           onResize={(w, h) => commit({ ...layout(), log: { ...logRec(), w, h } })}
           onMoveEnd={endGeom}
           onClose={() => void save({ ...layout(), log: { ...logRec(), visible: false } })}
+          lines={logLines()}
+          setLines={(lines) => {
+            if (sameLines(logLines(), lines)) return;
+            setLogLines(lines);
+            writeCachedLogLines(lines);
+          }}
         />
       </Show>
       <StatusLine busy={busy()} status={status()} />
@@ -254,15 +268,18 @@ function LogWindow(props: {
   onResize: (w: number, h: number) => void;
   onMoveEnd: () => void;
   onClose: () => void;
+  lines: string[];
+  setLines: (lines: string[]) => void;
 }) {
-  const [lines, setLines] = createSignal<string[]>([]);
   onSettled(() => {
     const tick = () => {
       api
         .progress()
-        .then((r) => setLines(r.lines))
+        .then((r) => {
+          if (!sameLines(props.lines, r.lines)) props.setLines(r.lines);
+        })
         .catch((e) => {
-          setLines((cur) => (cur.length > 0 ? cur : [String(e)]));
+          if (props.lines.length === 0) props.setLines([String(e)]);
         });
     };
     tick();
@@ -270,7 +287,7 @@ function LogWindow(props: {
     return () => clearInterval(t);
   });
   createEffect(
-    () => lines(),
+    () => props.lines,
     () => {
       const el = document.querySelector("[data-log]");
       if (el) el.scrollTop = el.scrollHeight;
@@ -294,8 +311,12 @@ function LogWindow(props: {
         data-log
         class="h-full overflow-auto bg-white p-2 font-mono text-[12px] leading-4 text-black"
       >
-        <For each={lines()} fallback={<div class="text-neutral-500">waiting…</div>}>
-          {(line) => <div>{line}</div>}
+        <For
+          each={props.lines}
+          keyed={false}
+          fallback={<div class="text-neutral-500">waiting…</div>}
+        >
+          {(line) => <div>{line()}</div>}
         </For>
       </div>
     </Frame>

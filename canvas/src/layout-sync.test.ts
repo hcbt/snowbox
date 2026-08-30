@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Layout, WindowRec } from "./api";
-import { applyFetchedLayout, defaultLog, sameLayout } from "./layout-sync";
+import type { Sandbox } from "./api";
+import { applyFetchedLayout, defaultLog, sameLayout, sameLines, sandboxLive } from "./layout-sync";
 
 const win = (over: Partial<WindowRec> & Pick<WindowRec, "id" | "sandbox">): WindowRec => ({
   title: over.id,
@@ -77,6 +78,38 @@ describe("applyFetchedLayout", () => {
     delete fetched.log;
     const next = applyFetchedLayout(local, fetched, new Set(["s1"]), false);
     expect(next.log).toEqual({ x: 10, y: 20, w: 300, h: 120, visible: true });
+  });
+});
+
+describe("sandboxLive", () => {
+  const running = (id: string): Sandbox => ({
+    id,
+    name: id,
+    state: "running",
+    home: [],
+    limits: { cpu: 2, ram: 1, disk: 1 },
+  });
+
+  test("empty Host list is live so a reload does not flash stopped", () => {
+    expect(sandboxLive([], "s1")).toBe(true);
+  });
+
+  test("a running Sandbox from the session cache is live on first paint", () => {
+    expect(sandboxLive([running("s1")], "s1")).toBe(true);
+  });
+
+  test("once the Host list arrives, a missing Sandbox is not live", () => {
+    expect(sandboxLive([running("other")], "s1")).toBe(false);
+  });
+});
+
+describe("sameLines", () => {
+  test("equal content is equal even when the array is new", () => {
+    expect(sameLines(["a", "b"], ["a", "b"])).toBe(true);
+  });
+
+  test("a new line is not equal", () => {
+    expect(sameLines(["a"], ["a", "b"])).toBe(false);
   });
 });
 

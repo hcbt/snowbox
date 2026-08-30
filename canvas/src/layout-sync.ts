@@ -1,4 +1,4 @@
-import type { Layout, LogRec, WindowRec } from "./api";
+import type { Layout, LogRec, Sandbox, WindowRec } from "./api";
 
 export function defaultLog(): LogRec {
   return { x: 240, y: 72, w: 560, h: 280, visible: false };
@@ -45,31 +45,130 @@ export function normalizeLayout(fetched: Layout, sandboxIds: Set<string>): Layou
   };
 }
 
-const LAYOUT_CACHE = "snowbox.layout";
+const SNAP_CACHE = "snowbox.canvas";
+const LEGACY_LAYOUT_CACHE = "snowbox.layout";
 
-export function readCachedLayout(): Layout | null {
+export type TermPoster = { id: string; html: string };
+
+export type CanvasSnap = {
+  layout: Layout;
+  sandboxes: Sandbox[];
+  logLines: string[];
+  termPosters: TermPoster[];
+};
+
+export function sandboxLive(sandboxes: Sandbox[], id: string): boolean {
+  const row = sandboxes.find((s) => s.id === id);
+  if (!row) return sandboxes.length === 0;
+  return row.state === "running";
+}
+
+export function sameLines(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+export function sameSandboxes(a: Sandbox[], b: Sandbox[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (!left || !right) return false;
+    if (left.id !== right.id || left.state !== right.state || left.booting !== right.booting) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function emptySnap(): CanvasSnap {
+  return { layout: defaultLayout(), sandboxes: [], logLines: [], termPosters: [] };
+}
+
+function readSnapRaw(): CanvasSnap | null {
   try {
-    const raw = globalThis.sessionStorage?.getItem(LAYOUT_CACHE);
-    if (!raw) return null;
-    // SAFETY: sessionStorage holds JSON this Canvas wrote as Layout.
-    const parsed = JSON.parse(raw) as Layout;
-    if (!Array.isArray(parsed.windows) || parsed.icon_manager == null) return null;
+    const store = globalThis.sessionStorage;
+    if (!store) return null;
+    const raw = store.getItem(SNAP_CACHE);
+    if (raw) {
+      // SAFETY: sessionStorage holds JSON this Canvas wrote as CanvasSnap.
+      const parsed = JSON.parse(raw) as CanvasSnap;
+      if (!parsed.layout || !Array.isArray(parsed.layout.windows)) return null;
+      return {
+        layout: {
+          windows: parsed.layout.windows,
+          icon_manager: normalizeIcon(parsed.layout.icon_manager),
+          log: normalizeLog(parsed.layout.log),
+        },
+        sandboxes: Array.isArray(parsed.sandboxes) ? parsed.sandboxes : [],
+        logLines: Array.isArray(parsed.logLines) ? parsed.logLines : [],
+        termPosters: Array.isArray(parsed.termPosters) ? parsed.termPosters : [],
+      };
+    }
+    const legacy = store.getItem(LEGACY_LAYOUT_CACHE);
+    if (!legacy) return null;
+    // SAFETY: older sessions stored Layout JSON under snowbox.layout.
+    const layout = JSON.parse(legacy) as Layout;
+    if (!Array.isArray(layout.windows) || layout.icon_manager == null) return null;
     return {
-      windows: parsed.windows,
-      icon_manager: normalizeIcon(parsed.icon_manager),
-      log: normalizeLog(parsed.log),
+      layout: {
+        windows: layout.windows,
+        icon_manager: normalizeIcon(layout.icon_manager),
+        log: normalizeLog(layout.log),
+      },
+      sandboxes: [],
+      logLines: [],
+      termPosters: [],
     };
   } catch {
     return null;
   }
 }
 
-export function writeCachedLayout(layout: Layout): void {
+export function readCachedSnap(): CanvasSnap | null {
+  return readSnapRaw();
+}
+
+export function readCachedLayout(): Layout | null {
+  return readSnapRaw()?.layout ?? null;
+}
+
+function writeSnap(snap: CanvasSnap): void {
   try {
-    globalThis.sessionStorage?.setItem(LAYOUT_CACHE, JSON.stringify(layout));
+    globalThis.sessionStorage?.setItem(SNAP_CACHE, JSON.stringify(snap));
   } catch {
     /* private mode / missing storage */
   }
+}
+
+export function writeCachedLayout(layout: Layout): void {
+  const cur = readSnapRaw() ?? emptySnap();
+  writeSnap({ ...cur, layout });
+}
+
+export function writeCachedSandboxes(sandboxes: Sandbox[]): void {
+  const cur = readSnapRaw() ?? emptySnap();
+  writeSnap({ ...cur, sandboxes });
+}
+
+export function writeCachedLogLines(logLines: string[]): void {
+  const cur = readSnapRaw() ?? emptySnap();
+  writeSnap({ ...cur, logLines });
+}
+
+export function readTermPoster(id: string): string | undefined {
+  return readSnapRaw()?.termPosters.find((p) => p.id === id)?.html;
+}
+
+export function writeTermPoster(id: string, html: string): void {
+  const cur = readSnapRaw() ?? emptySnap();
+  writeSnap({
+    ...cur,
+    termPosters: [...cur.termPosters.filter((p) => p.id !== id), { id, html }],
+  });
 }
 
 function frozenWindow(remote: WindowRec, local: WindowRec | undefined): WindowRec {

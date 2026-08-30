@@ -1,8 +1,9 @@
-import { createEffect, onSettled } from "solid-js";
+import { Show, createEffect, createSignal, onSettled } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { json } from "./api";
+import { readTermPoster, writeTermPoster } from "./layout-sync";
 
 type PtyFrame = string | ArrayBuffer | ArrayBufferView;
 
@@ -25,6 +26,7 @@ export function Term(props: { windowId: string; active?: boolean; onActivate?: (
   const setHost = (el: HTMLDivElement) => {
     host = el;
   };
+  const [poster, setPoster] = createSignal(readTermPoster(props.windowId));
 
   const grab = (e: Event) => {
     e.stopPropagation();
@@ -56,8 +58,18 @@ export function Term(props: { windowId: string; active?: boolean; onActivate?: (
     t.open(el);
 
     let dropped = false;
+    let covering = poster() !== undefined;
     let ws: WebSocket | undefined;
     const enc = new TextEncoder();
+    const uncover = () => {
+      covering = false;
+      setPoster(undefined);
+    };
+    const snap = () => {
+      if (dropped || covering) return;
+      const node = el.querySelector(".xterm");
+      if (node) writeTermPoster(props.windowId, node.outerHTML);
+    };
     const sendSize = () => {
       if (ws?.readyState === WebSocket.OPEN && t.cols > 0 && t.rows > 0) {
         ws.send(`resize ${t.cols} ${t.rows}`);
@@ -81,14 +93,27 @@ export function Term(props: { windowId: string; active?: boolean; onActivate?: (
         );
         ws = sock;
         sock.binaryType = "arraybuffer";
+        let got = false;
         sock.onopen = () => {
           fit.fit();
           sendSize();
           if (props.active !== false) t.focus();
+          window.setTimeout(() => {
+            if (!dropped && !got) uncover();
+          }, 100);
         };
         sock.onmessage = (ev) => {
+          got = true;
           // SAFETY: binaryType is arraybuffer; browsers send string or ArrayBuffer.
-          t.write(wsBytes(ev.data as PtyFrame));
+          const data = wsBytes(ev.data as PtyFrame);
+          if (covering) {
+            t.write(data, () => {
+              uncover();
+              snap();
+            });
+            return;
+          }
+          t.write(data);
         };
         sock.onclose = () => {
           if (!dropped) t.write("\r\n[window closed]\r\n");
@@ -102,7 +127,12 @@ export function Term(props: { windowId: string; active?: boolean; onActivate?: (
       fit.fit();
       sendSize();
     });
+    const tick = window.setInterval(snap, 1000);
+    window.addEventListener("pagehide", snap);
     return () => {
+      window.clearInterval(tick);
+      window.removeEventListener("pagehide", snap);
+      snap();
       dropped = true;
       term = undefined;
       ro.disconnect();
@@ -120,11 +150,23 @@ export function Term(props: { windowId: string; active?: boolean; onActivate?: (
 
   return (
     <div
-      ref={setHost}
+      class="relative h-full w-full bg-white"
       data-win={props.windowId}
-      class="h-full w-full bg-white"
       onPointerDown={grab}
       onMouseDown={grab}
-    />
+    >
+      <div ref={setHost} class="h-full w-full" />
+      <Show when={poster()}>
+        {(html) => (
+          <div
+            class="pointer-events-none absolute inset-0 z-10 overflow-hidden bg-white"
+            ref={(node) => {
+              // SAFETY: html is .xterm outerHTML this Canvas stored for this Window.
+              node.innerHTML = html();
+            }}
+          />
+        )}
+      </Show>
+    </div>
   );
 }
