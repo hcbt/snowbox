@@ -1,10 +1,11 @@
 lockfile_version: '1'
-generated_at: '2026-08-27T20:02:51.234307+00:00'
+generated_at: '2026-09-01T02:29:23.870942+00:00'
 apm_version: 0.21.0
 dependencies:
 - repo_url: dmmulroy/anti-slop
   host: github.com
   resolved_commit: 6d538555cb151d4121ed51a27db81890eacf8ae9
+  resolved_ref: 6d538555
   package_type: skill_bundle
   deployed_files:
   - .agents/skills/install-anti-slop
@@ -56,9 +57,90 @@ dependencies:
     .agents/skills/install-anti-slop/assets/anti-slop/shared/reflect-method.ts: sha256:318f56b17d9063134860fe4c51c2e22cb0a55e7f421a0ff4ccedb5a9e9c2b2d9
     .agents/skills/install-anti-slop/scripts/install.mjs: sha256:649456714a15d937748114901c94ccdfbc93d8b2ff69497dbd5848e9431891aa
   content_hash: sha256:21ba9a09148a34eba08bb79057c1ddb1ffb0e7b0a80a5e1df17b1b3ebc7cb87b
+- repo_url: emilkowalski/skills
+  host: github.com
+  resolved_commit: d23d7f88a2e21c9e4b1418c7abe420f5c1052ba7
+  resolved_ref: d23d7f88a2e21c9e4b1418c7abe420f5c1052ba7
+  package_type: skill_bundle
+  deployed_files:
+  - .agents/skills/animate
+  - .agents/skills/animate-expo
+  - .agents/skills/animate-expo/RECIPES.md
+  - .agents/skills/animate-expo/SKILL.md
+  - .agents/skills/animate/RECIPES.md
+  - .agents/skills/animate/SKILL.md
+  - .agents/skills/animation-vocabulary
+  - .agents/skills/animation-vocabulary/SKILL.md
+  - .agents/skills/apple-design
+  - .agents/skills/apple-design/SKILL.md
+  - .agents/skills/ask-sonner
+  - .agents/skills/ask-sonner/API.md
+  - .agents/skills/ask-sonner/SKILL.md
+  - .agents/skills/emil-design-eng
+  - .agents/skills/emil-design-eng/SKILL.md
+  - .agents/skills/find-animation-opportunities
+  - .agents/skills/find-animation-opportunities/SKILL.md
+  - .agents/skills/improve-animations
+  - .agents/skills/improve-animations/AUDIT.md
+  - .agents/skills/improve-animations/PLAN-TEMPLATE.md
+  - .agents/skills/improve-animations/SKILL.md
+  - .agents/skills/pick-ui-library
+  - .agents/skills/pick-ui-library/SKILL.md
+  - .agents/skills/review-animations
+  - .agents/skills/review-animations/SKILL.md
+  - .agents/skills/review-animations/STANDARDS.md
+  - .agents/skills/write-swift
+  - .agents/skills/write-swift/SKILL.md
+  deployed_file_hashes:
+    .agents/skills/animate-expo/RECIPES.md: sha256:1193cb71334da2e2341778dd92bec9ac79d989cb07fd55d661f324ed5871e718
+    .agents/skills/animate-expo/SKILL.md: sha256:2121fc72ffa476492c1b91ccf96c7b26aade9d1a332dc5834ba3526e1102b00d
+    .agents/skills/animate/RECIPES.md: sha256:21ff63d84391db8d96ecdf9170095f55a42c836ccc36fd3269c4772bab031ba2
+    .agents/skills/animate/SKILL.md: sha256:f6317335da2662e92270dc0a6128bea95d7216cd751f86628e3ac6b72804e805
+    .agents/skills/animation-vocabulary/SKILL.md: sha256:d718b48fe3c7898804d588f050a2e266d82c9f5ef51da256c8cb8b5951527757
+    .agents/skills/apple-design/SKILL.md: sha256:11840b24a11d7f94f39c6aaab074750ae4e4de4ef54ee4b1dd97e16ebd485e61
+    .agents/skills/ask-sonner/API.md: sha256:4bb06f482c5757529e3d7a672a30fbeed42d24919a63e2571384a9ce1549aa7f
+    .agents/skills/ask-sonner/SKILL.md: sha256:be1b04511aadb4d7d81aa8cd2b55c260a626aae534983bc8ae3fbe26bbf48632
+    .agents/skills/emil-design-eng/SKILL.md: sha256:e71de849347050c2c573c1cf24d742d5a13459557ecffa6e562f08006f46b5b7
+    .agents/skills/find-animation-opportunities/SKILL.md: sha256:91c1243164057fbf824088d12faea937878a757a7ac653e8288b775e8b27b882
+    .agents/skills/improve-animations/AUDIT.md: sha256:551c8473e20e5f4774680bc24d45e1c68e50992582720905c6b077756b7b5a55
+    .agents/skills/improve-animations/PLAN-TEMPLATE.md: sha256:0a08ac8e23fd2082d7ffb86aeed7b789de77328c3cf874b16f1a755f2ef0a6ad
+    .agents/skills/improve-animations/SKILL.md: sha256:68f17bbc4671593d2f43dba26a679243e2153ba5f26965fb7d59df52842534ff
+    .agents/skills/pick-ui-library/SKILL.md: sha256:4b889bd6c08358499ac4a7202b8af71ffbd3485d2468f7b09d0613bbe7b24bf4
+    .agents/skills/review-animations/SKILL.md: sha256:61cf8ac0c4c8e1f63385298c546b16c65ca9aec34abddcd04e821c16712d671d
+    .agents/skills/review-animations/STANDARDS.md: sha256:e7d3605034acda54ca13e43aec9e64d65b53de20f75b11b8d694e373012fbe07
+    .agents/skills/write-swift/SKILL.md: sha256:2579cb2684245f75a261cbb13aa4a12f7f9441dabdfe3bc2e72dc2f04ec5e9fd
+  content_hash: sha256:071c5ca2527b9ad32a3ab4c86ff284f0024cb62790f530f0d23ea32ad8616323
+  skill_subset:
+  - animate
+  - animate-expo
+  - animation-vocabulary
+  - apple-design
+  - ask-sonner
+  - emil-design-eng
+  - find-animation-opportunities
+  - improve-animations
+  - pick-ui-library
+  - review-animations
+  - write-swift
+- repo_url: emilkowalski/skills
+  host: github.com
+  resolved_commit: d23d7f88a2e21c9e4b1418c7abe420f5c1052ba7
+  resolved_ref: d23d7f88a2e21c9e4b1418c7abe420f5c1052ba7
+  virtual_path: skills/prototype
+  is_virtual: true
+  package_type: claude_skill
+  deployed_files:
+  - .agents/skills/emil-prototype
+  - .agents/skills/emil-prototype/PICKER.md
+  - .agents/skills/emil-prototype/SKILL.md
+  deployed_file_hashes:
+    .agents/skills/emil-prototype/PICKER.md: sha256:31a55eec94715cc79942e91e172e539e3031dcd5e2e5ee7c1446cf2caee960a6
+    .agents/skills/emil-prototype/SKILL.md: sha256:2ad8401c4deaddb54947fb65247f790e7b3d8784e35312bcbedbfb1d59cd89ce
+  content_hash: sha256:f246d1f47566481d9207e1aa574bdee5454257d862919a6591283e9af2f57eab
 - repo_url: mattpocock/skills
   host: github.com
   resolved_commit: 6654f6b60cd9d5be8b54c6fafe44346dabeb3b76
+  resolved_ref: 6654f6b6
   package_type: marketplace_plugin
   deployed_files:
   - .agents/skills/ask-matt

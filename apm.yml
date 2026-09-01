@@ -15,6 +15,26 @@ dependencies:
   apm:
   - mattpocock/skills#6654f6b6
   - dmmulroy/anti-slop#6d538555
+  # emilkowalski/skills also ships `prototype`; that name is already taken by
+  # mattpocock. Alias is the dest directory (APM: git + path + alias).
+  - git: emilkowalski/skills
+    path: skills/prototype
+    ref: d23d7f88a2e21c9e4b1418c7abe420f5c1052ba7
+    alias: emil-prototype
+  - git: emilkowalski/skills
+    ref: d23d7f88a2e21c9e4b1418c7abe420f5c1052ba7
+    skills:
+    - animate
+    - animate-expo
+    - animation-vocabulary
+    - apple-design
+    - ask-sonner
+    - emil-design-eng
+    - find-animation-opportunities
+    - improve-animations
+    - pick-ui-library
+    - review-animations
+    - write-swift
   mcp: []
 includes: auto
 scripts: {}
