@@ -97,7 +97,7 @@ export function Term(props: {
     ws = sock;
     sock.binaryType = "arraybuffer";
     let got = false;
-    sock.onopen = () => {
+    const onOpen = () => {
       fit.fit();
       sendSize();
       if (props.active !== false) t.focus();
@@ -105,7 +105,7 @@ export function Term(props: {
         if (!dropped && !got) uncover();
       }, 100);
     };
-    sock.onmessage = (ev) => {
+    const onMessage = (ev: MessageEvent) => {
       got = true;
       // SAFETY: binaryType is arraybuffer; browsers send string or ArrayBuffer.
       const data = wsBytes(ev.data as PtyFrame);
@@ -118,12 +118,16 @@ export function Term(props: {
       }
       t.write(data);
     };
-    sock.onclose = () => {
+    const onClose = () => {
       if (!dropped) t.write("\r\n[window closed]\r\n");
     };
-    sock.onerror = () => {
+    const onError = () => {
       if (!dropped) t.write("\r\n[window: socket error]\r\n");
     };
+    sock.addEventListener("open", onOpen);
+    sock.addEventListener("message", onMessage);
+    sock.addEventListener("close", onClose);
+    sock.addEventListener("error", onError);
 
     requestAnimationFrame(() => {
       fit.fit();
@@ -138,6 +142,10 @@ export function Term(props: {
       dropped = true;
       term = undefined;
       ro.disconnect();
+      sock.removeEventListener("open", onOpen);
+      sock.removeEventListener("message", onMessage);
+      sock.removeEventListener("close", onClose);
+      sock.removeEventListener("error", onError);
       ws?.close();
       t.dispose();
     };

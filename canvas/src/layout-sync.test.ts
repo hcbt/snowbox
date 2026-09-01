@@ -21,6 +21,14 @@ const layout = (over: Partial<Layout> = {}): Layout => ({
   ...over,
 });
 
+const running = (id: string): Sandbox => ({
+  id,
+  name: id,
+  state: "running",
+  home: [],
+  limits: { cpu: 2, ram: 1, disk: 1 },
+});
+
 describe("applyFetchedLayout", () => {
   test("poll does not snap a Window that is being moved", () => {
     const local = layout();
@@ -82,14 +90,6 @@ describe("applyFetchedLayout", () => {
 });
 
 describe("sandboxLive", () => {
-  const running = (id: string): Sandbox => ({
-    id,
-    name: id,
-    state: "running",
-    home: [],
-    limits: { cpu: 2, ram: 1, disk: 1 },
-  });
-
   test("empty Host list is live so a reload does not flash stopped", () => {
     expect(sandboxLive([], "s1")).toBe(true);
   });

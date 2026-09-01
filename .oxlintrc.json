@@ -20,14 +20,21 @@
     "daemon/**",
     "eval/**"
   ],
+  "plugins": ["unicorn", "typescript", "oxc", "import"],
   "jsPlugins": [
     {
       "name": "anti-slop",
       "specifier": "./canvas/tools/oxlint/anti-slop/index.ts"
     }
   ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error"
+  },
   "rules": {
     "complexity": ["error", { "max": 20 }],
+    "no-underscore-dangle": ["error", { "allow": ["__SNOWBOX_TOKEN__"] }],
+    "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
     "anti-slop/no-known-value-widening": "error",
