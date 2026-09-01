@@ -3,7 +3,17 @@
     "canvas/node_modules/**",
     "canvas/dist/**",
     "canvas/tools/**",
+    ".agent/**",
     ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".continue/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".opencode/**",
+    ".pi/**",
+    ".roo/**",
+    ".windsurf/**",
     "apm_modules/**"
   ]
 }

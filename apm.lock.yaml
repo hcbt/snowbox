@@ -1,11 +1,11 @@
 lockfile_version: '1'
-generated_at: '2026-09-01T02:29:23.870942+00:00'
+generated_at: '2026-09-01T19:27:26.387236+00:00'
 apm_version: 0.21.0
 dependencies:
 - repo_url: dmmulroy/anti-slop
   host: github.com
-  resolved_commit: 6d538555cb151d4121ed51a27db81890eacf8ae9
-  resolved_ref: 6d538555
+  resolved_commit: e8c4880471b23ab7f216fba7b27d173a6ef07d4c
+  resolved_ref: e8c48804
   package_type: skill_bundle
   deployed_files:
   - .agents/skills/install-anti-slop
@@ -29,34 +29,38 @@ dependencies:
   - .agents/skills/install-anti-slop/assets/anti-slop/rules/no-widen-then-assert.ts
   - .agents/skills/install-anti-slop/assets/anti-slop/rules/require-safety-comment-for-type-assertion.ts
   - .agents/skills/install-anti-slop/assets/anti-slop/shared/dictionary-types.ts
+  - .agents/skills/install-anti-slop/assets/anti-slop/shared/function-parameters.ts
   - .agents/skills/install-anti-slop/assets/anti-slop/shared/lexical-type-parameters.ts
   - .agents/skills/install-anti-slop/assets/anti-slop/shared/reflect-method.ts
+  - .agents/skills/install-anti-slop/assets/anti-slop/shared/type-alias-resolution.ts
   - .agents/skills/install-anti-slop/scripts/install.mjs
   deployed_file_hashes:
-    .agents/skills/install-anti-slop/SKILL.md: sha256:4d769c56bcaa5217a39570196a246741c4f460f999676a76115baadc48146599
+    .agents/skills/install-anti-slop/SKILL.md: sha256:c4f283bae76c7e37a049e5347c0c93ea03ea9219c06634aa286e0f85b7d2c467
     .agents/skills/install-anti-slop/assets/anti-slop/effect/index.ts: sha256:00a732685add59bb23247f04f8bbd674581c8251d1d772f828eed4d11e291822
     .agents/skills/install-anti-slop/assets/anti-slop/effect/rules/no-service-constructor-imports.ts: sha256:c397d1132329fbe82213dda80059c86acb99f0fe243e59615f615a86069c6fb1
     .agents/skills/install-anti-slop/assets/anti-slop/index.ts: sha256:d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f
     .agents/skills/install-anti-slop/assets/anti-slop/rules/no-chained-type-assertions.ts: sha256:72f8e981520f94adac0ffbdab8f8e84e5f2a4595f14e4a6471be917a85a20a15
     .agents/skills/install-anti-slop/assets/anti-slop/rules/no-conditional-empty-object-spread.ts: sha256:33f044030d208fcc10be73bb19c8172c275c5229df4b0ca8ec10f069bbe60062
-    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-known-value-widening.ts: sha256:d631f9cb6a3629d1d9227a4568c66eb2e8e2b938a57cbec34b6b25fcb31bf62e
+    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-known-value-widening.ts: sha256:c13ea909956639f63235d05ade6a1df2bf45af756fc232ce4311589211be3d6b
     .agents/skills/install-anti-slop/assets/anti-slop/rules/no-module-mocking.ts: sha256:90cfc166a28e78544a934e4a000811330c1ea6d33d90cb309b1bed27e51e79f3
-    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-object-parameters.ts: sha256:3d750130cf7520e7541cb758ebed0dfa603a0e482061a60ac3a12fe8821a4469
+    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-object-parameters.ts: sha256:2056e99dcb228604d9b2534952045e8ebf9f90af54add67d07a1211657d32941
     .agents/skills/install-anti-slop/assets/anti-slop/rules/no-reflect-apply.ts: sha256:f7920a332106252d6a24cdc917a2c1a433eb438792996ccceb5a25cd6e591dbb
     .agents/skills/install-anti-slop/assets/anti-slop/rules/no-reflect-get.ts: sha256:95c5aa0f8e23b10d9345b1776082e08704ec6590298176a8ede8dfdb6e7cb56f
-    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-runtime-typeof.ts: sha256:eed63d5667763ddbc48a6b83662e446f100c444cddefc3d066ac0015670590b8
-    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-shape-in-symbol-names.ts: sha256:54aebfebb25c1f8f2ce181f8f82fd05413a0a63f7cdac52e9d570ea1cd284510
-    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-unknown-parameters.ts: sha256:ab5cd31a9a464dd12e4e930298fcd773c1c1badfaf66619915d5435b5d57db61
-    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-unknown-returns.ts: sha256:fca7a61334b902ec76736b6d8ad5b95a84a0d4366dcc7ae1bc44492523052f3b
-    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-unknown-type-aliases.ts: sha256:59df2bcc6fdc892e67650c64662c2ac03d0396c2dcce9c272891c94ba5a4c041
-    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-unsafe-dictionary-type.ts: sha256:bec8e540e05a749e06474b1c7bd93879747b3330f0b9c87fd1a3ffe959ace075
+    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-runtime-typeof.ts: sha256:c3ff29662f9f5a0cbad527b200aadd486cbe63ee0d9bbf10c409ce9c39ec678c
+    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-shape-in-symbol-names.ts: sha256:4e5edcb5ed083de77970a2e4f64e4b2090ba6c4588e9fc6bcb1f01900ae905b7
+    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-unknown-parameters.ts: sha256:81df45f83b1bca1bbf0bbc36e9211e10cad1aa2bb0ab604840ed9f1b94eaa2e5
+    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-unknown-returns.ts: sha256:67f3ac72d9f98ce29426e70be1e0c359599d94b5799f1130b7ec4cc34129f26b
+    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-unknown-type-aliases.ts: sha256:e34000ccdd5c496fadb1418e29b44a1df970ebc9075e89ef2412f7029ec4c15b
+    .agents/skills/install-anti-slop/assets/anti-slop/rules/no-unsafe-dictionary-type.ts: sha256:6ff0b3aafe00bc42300080c514ddbee54a45508d5781cab2fb78156a19756a71
     .agents/skills/install-anti-slop/assets/anti-slop/rules/no-widen-then-assert.ts: sha256:63f2c07cc42b8ad60a7e868efbd7b29e462b9ba960fbd07bbc8f590ef9e3f879
-    .agents/skills/install-anti-slop/assets/anti-slop/rules/require-safety-comment-for-type-assertion.ts: sha256:78bad368fcc137f0ed9d6f21626baed5c980fe3ea6d093c93ac4ed9858b9a309
-    .agents/skills/install-anti-slop/assets/anti-slop/shared/dictionary-types.ts: sha256:a57b964ab55a39396c8922f400b0912e3479cb9d28de716a4a536abcf7283966
+    .agents/skills/install-anti-slop/assets/anti-slop/rules/require-safety-comment-for-type-assertion.ts: sha256:c8ed9f50f1c6e3592b77165dd8847d187ee9b0ef955d50f8099498d3139aa27c
+    .agents/skills/install-anti-slop/assets/anti-slop/shared/dictionary-types.ts: sha256:0f319a2d2cb34c7b3902fb78301c91e1a750bd663c754e73d669f31dc5026525
+    .agents/skills/install-anti-slop/assets/anti-slop/shared/function-parameters.ts: sha256:ad80a650ea14847736ab9ee4c872dc89cc7d527bf60e7de20112bcb8f679545c
     .agents/skills/install-anti-slop/assets/anti-slop/shared/lexical-type-parameters.ts: sha256:1ae0aa3ec245f1dc43c4bbbd8be1e2e4230e5dc389d1ca4e8de8f51b62ceff29
     .agents/skills/install-anti-slop/assets/anti-slop/shared/reflect-method.ts: sha256:318f56b17d9063134860fe4c51c2e22cb0a55e7f421a0ff4ccedb5a9e9c2b2d9
+    .agents/skills/install-anti-slop/assets/anti-slop/shared/type-alias-resolution.ts: sha256:5520e97b177f0093af2943808ac63cef0f6c03fedd197a36137c66209d78a8e0
     .agents/skills/install-anti-slop/scripts/install.mjs: sha256:649456714a15d937748114901c94ccdfbc93d8b2ff69497dbd5848e9431891aa
-  content_hash: sha256:21ba9a09148a34eba08bb79057c1ddb1ffb0e7b0a80a5e1df17b1b3ebc7cb87b
+  content_hash: sha256:2f5932544ed4359b10a045dcf9d49cd190e256c28d3b990b21eb0968212983e1
 - repo_url: emilkowalski/skills
   host: github.com
   resolved_commit: d23d7f88a2e21c9e4b1418c7abe420f5c1052ba7

@@ -14,7 +14,7 @@ compilation:
 dependencies:
   apm:
   - mattpocock/skills#6654f6b6
-  - dmmulroy/anti-slop#6d538555
+  - dmmulroy/anti-slop#e8c48804
   # emilkowalski/skills also ships `prototype`; that name is already taken by
   # mattpocock. Alias is the dest directory (APM: git + path + alias).
   - git: emilkowalski/skills
