@@ -1,6 +1,20 @@
 import type { JSX } from "solid-js";
 import { Show } from "solid-js";
 
+function CloseMark() {
+  return (
+    <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+      <path
+        d="M1.2 1.2 L6.8 6.8 M6.8 1.2 L1.2 6.8"
+        fill="none"
+        stroke="#fff"
+        strokeWidth="1.4"
+        strokeLinecap="square"
+      />
+    </svg>
+  );
+}
+
 export function Frame(props: {
   title: string;
   x: number;
@@ -9,6 +23,7 @@ export function Frame(props: {
   w?: number;
   h?: number;
   dataWin?: string;
+  sheen?: boolean;
   onMove: (x: number, y: number) => void;
   onMoveStart?: () => void;
   onMoveEnd?: () => void;
@@ -82,7 +97,7 @@ export function Frame(props: {
       ref={(el) => {
         root = el;
       }}
-      class="absolute flex min-h-20 min-w-[180px] flex-col"
+      class={`twm-float absolute flex min-h-20 min-w-[180px] flex-col${props.sheen ? " twm-sheen" : ""}`}
       data-win={props.dataWin}
       style={{
         left: `${props.x}px`,
@@ -100,17 +115,15 @@ export function Frame(props: {
       }}
     >
       <div
-        class="flex h-5 shrink-0 cursor-grab items-center gap-1 bg-twm px-[3px] text-[13px] font-bold text-white active:cursor-grabbing"
+        class="twm-bar flex h-7 shrink-0 cursor-grab items-center gap-2 px-2 text-[13px] leading-4 font-medium tracking-[0.01em] text-white active:cursor-grabbing"
         onMouseDown={(e) => drag(e, "move")}
       >
-        <span class="relative size-3 shrink-0 border border-white bg-twm-hi">
-          <span class="absolute top-[3px] left-[3px] size-1.5 bg-white" />
-        </span>
+        <span class="twm-win-icon" />
         <span class="min-w-0 flex-1 overflow-hidden whitespace-nowrap">{props.title}</span>
         <Show when={props.onEnvironment}>
           <button
             type="button"
-            class="shrink-0 border border-white px-0.5 text-[10px] leading-none text-white"
+            class="twm-env"
             title="Environment"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
@@ -118,37 +131,41 @@ export function Frame(props: {
               props.onEnvironment?.();
             }}
           >
-            env
+            ENV
           </button>
         </Show>
         <Show when={props.onIconify}>
           <button
             type="button"
-            class="relative size-3 shrink-0 border border-white bg-twm"
+            class="twm-win-btn bg-twm"
             title="Iconify"
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               props.onIconify?.();
             }}
           >
-            <span class="absolute right-[2px] bottom-[3px] left-[2px] h-0.5 bg-white" />
+            <span class="h-0.5 w-2 bg-white" />
           </button>
         </Show>
         <Show when={props.onClose}>
           <button
             type="button"
-            class="flex size-3 shrink-0 items-center justify-center border border-white text-[11px] leading-none text-white"
+            class="twm-win-btn"
             title="Close"
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               props.onClose?.();
             }}
           >
-            ×
+            <CloseMark />
           </button>
         </Show>
       </div>
-      <div class="relative min-h-0 flex-1 border-x-2 border-b-2 border-twm bg-white">
+      <div
+        class={`relative min-h-0 flex-1 border-x border-b border-twm${props.sheen ? "" : " bg-night-surface"}`}
+      >
         {props.children}
         <Show when={props.onResize && props.w !== undefined && props.h !== undefined}>
           <div

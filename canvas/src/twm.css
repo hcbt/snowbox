@@ -5,13 +5,19 @@
 @custom-variant hover (&:hover);
 
 @theme {
-  --color-twm: #c3366d;
-  --color-twm-hi: #db4a82;
+  --color-twm: #6b3a9e;
+  --color-twm-hi: #8552b8;
   --color-twm-head: #cfcfcf;
-  --color-twm-line: #7a1e44;
-  --color-twm-muted: #e7a0bb;
-  --color-x11: #bebebe;
-  --font-twm: Helvetica, Arial, "Lucida Grande", sans-serif;
+  --color-twm-line: #4a2674;
+  --color-twm-muted: #c4a8e0;
+  --color-x11: #b4b4b8;
+  --color-night: #161618;
+  --color-night-raised: #222226;
+  --color-night-surface: #1c1c20;
+  --color-night-text: #ededef;
+  --font-twm: "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
+  --font-mono: Menlo, ui-monospace, monospace;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 @layer base {
@@ -24,10 +30,17 @@
   html,
   body,
   #root {
-    @apply m-0 h-full overflow-hidden bg-x11 font-twm text-[13px] text-black;
-    font-smooth: never;
-    -webkit-font-smoothing: none;
+    @apply m-0 h-full overflow-hidden font-twm text-[13px] text-night-text;
+    background-color: var(--color-night);
+    background-image: linear-gradient(
+      in oklab 180deg,
+      oklab(21.9% 0.001 -0.004) 0%,
+      oklab(18.3% 0.001 -0.004) 100%
+    );
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     user-select: none;
+    color-scheme: dark;
   }
 
   button {
@@ -43,5 +56,89 @@
 
   .xterm-helper-textarea {
     user-select: text !important;
+  }
+}
+
+@layer components {
+  .twm-bar {
+    background-color: var(--color-twm);
+    background-image: linear-gradient(
+      in oklab 90deg,
+      oklab(46% 0.086 -0.131) 0%,
+      oklab(54.9% 0.078 -0.126) 100%
+    );
+  }
+
+  .twm-sheen {
+    background-color: var(--color-twm);
+    background-image: radial-gradient(
+      ellipse 90% 70% at 85% 10% in oklab,
+      oklab(54.9% 0.078 -0.126) 0%,
+      transparent 68%
+    );
+  }
+
+  .twm-float {
+    box-shadow: 0 16px 40px #00000073;
+  }
+
+  .twm-menu-float {
+    box-shadow: 0 16px 40px #00000080;
+  }
+
+  .twm-win-icon {
+    position: relative;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    border: 1.5px solid #fff;
+    background: var(--color-twm-hi);
+  }
+
+  .twm-win-icon::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 6px;
+    height: 6px;
+    background: #fff;
+  }
+
+  .twm-win-btn {
+    display: flex;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border: 1.5px solid #fff;
+    background: transparent;
+    color: #fff;
+    transition: transform 160ms var(--ease-out);
+  }
+
+  .twm-win-btn:active {
+    transform: scale(0.97);
+  }
+
+  .twm-env {
+    display: flex;
+    height: 16px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    padding-inline: 5px;
+    border: 1.5px solid #fff;
+    font-size: 9px;
+    font-weight: 500;
+    line-height: 9px;
+    letter-spacing: 0.08em;
+    color: #fff;
+    transition: transform 160ms var(--ease-out);
+  }
+
+  .twm-env:active {
+    transform: scale(0.97);
   }
 }

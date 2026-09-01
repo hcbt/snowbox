@@ -336,7 +336,7 @@ export function App() {
 
   return (
     <div
-      class="relative h-full w-full bg-x11"
+      class="relative h-full w-full"
       onContextMenu={(e) => openMenu(e)}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) setMenu(null);
@@ -532,13 +532,9 @@ function LogWindow(props: {
     >
       <div
         data-log
-        class="h-full overflow-auto bg-white p-2 font-mono text-[12px] leading-4 text-black"
+        class="h-full overflow-auto bg-night-surface px-4 py-3.5 font-mono text-[12px] leading-[18px] text-night-text"
       >
-        <For
-          each={props.lines}
-          keyed={false}
-          fallback={<div class="text-neutral-500">waiting…</div>}
-        >
+        <For each={props.lines} keyed={false} fallback={<div class="text-twm-muted">waiting…</div>}>
           {(line) => <div>{line()}</div>}
         </For>
       </div>
@@ -547,15 +543,13 @@ function LogWindow(props: {
 }
 
 function StatusLine(props: { busy: boolean; status: string }) {
+  const text = () => {
+    if (props.busy) return props.status || "working…";
+    return props.status || "ready";
+  };
   return (
-    <div
-      class="pointer-events-none fixed bottom-2 left-2 px-2 py-0.5 font-mono text-xs font-bold"
-      classList={{
-        "bg-twm text-white": props.busy || props.status.length > 0,
-        "text-black": !props.busy && props.status.length === 0,
-      }}
-    >
-      {props.busy ? props.status || "working…" : props.status}
+    <div class="twm-sheen pointer-events-none fixed bottom-4 left-4 px-2.5 py-1 font-mono text-[12px] leading-4 font-bold text-white">
+      {text()}
     </div>
   );
 }
@@ -586,6 +580,7 @@ function IconManager(props: {
         w={im().w}
         h={im().h}
         z={99990}
+        sheen
         onMoveStart={props.beginGeom}
         onMove={(x, y) => props.patchIcon({ x, y })}
         onResize={(w, h) => props.patchIcon({ w, h })}
@@ -598,11 +593,9 @@ function IconManager(props: {
             {(w) => (
               <button
                 type="button"
-                class="block w-full border-0 border-t border-twm-line bg-twm px-2 py-0.5 text-left font-bold text-white hover:bg-twm-hi"
-                classList={{
-                  "bg-twm-hi": props.focus === w().id,
-                  "text-twm-muted": !props.live(w().sandbox),
-                }}
+                class={`flex h-8 w-full items-center overflow-hidden border-0 border-t border-twm-line px-3 text-left font-medium whitespace-nowrap hover:bg-white/16 ${
+                  props.focus === w().id ? "bg-white/16" : ""
+                } ${props.live(w().sandbox) ? "text-white" : "text-twm-muted"}`}
                 onClick={() => {
                   props.patchWin(w().id, { iconified: false }, true);
                   props.raise(w().id);
@@ -630,7 +623,7 @@ function IconManager(props: {
             {(s) => (
               <button
                 type="button"
-                class="block w-full border-0 border-t border-twm-line bg-twm px-2 py-0.5 text-left font-bold text-twm-muted hover:bg-twm-hi hover:text-white"
+                class="flex h-8 w-full items-center overflow-hidden border-0 border-t border-twm-line px-3 text-left font-medium text-twm-muted whitespace-nowrap hover:bg-white/16 hover:text-white"
                 onClick={() => {
                   if (props.busy) return;
                   props.run(
@@ -712,7 +705,7 @@ function CanvasWindows(props: {
             <Show
               when={props.live(w().sandbox)}
               fallback={
-                <div class="flex h-full items-center justify-center font-twm text-[13px] text-neutral-500">
+                <div class="flex h-full items-center justify-center font-twm text-[13px] text-twm-muted">
                   {windowStatus(props.sandboxes, w().sandbox)}
                 </div>
               }

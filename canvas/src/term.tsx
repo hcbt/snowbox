@@ -46,14 +46,16 @@ export function Term(props: {
       cols: 80,
       rows: 24,
       cursorBlink: true,
-      fontFamily: "ui-monospace, Menlo, Monaco, monospace",
+      fontFamily: "Menlo, ui-monospace, Monaco, monospace",
       fontSize: 13,
+      lineHeight: 20 / 13,
       scrollback: 5000,
       theme: {
-        background: "#ffffff",
-        foreground: "#000000",
-        cursor: "#000000",
-        selectionBackground: "#c3366d",
+        background: "#1c1c20",
+        foreground: "#ededef",
+        cursor: "#6b3a9e",
+        cursorAccent: "#ededef",
+        selectionBackground: "#6b3a9e",
         selectionForeground: "#ffffff",
       },
     });
@@ -160,7 +162,7 @@ export function Term(props: {
 
   return (
     <div
-      class="relative h-full w-full bg-white"
+      class="relative h-full w-full bg-night-surface"
       data-win={props.windowId}
       onPointerDown={grab}
       onMouseDown={grab}
@@ -169,7 +171,7 @@ export function Term(props: {
       <Show when={poster()}>
         {(html) => (
           <div
-            class="pointer-events-none absolute inset-0 z-10 overflow-hidden bg-white"
+            class="pointer-events-none absolute inset-0 z-10 overflow-hidden bg-night-surface"
             ref={(node) => {
               // SAFETY: html is .xterm outerHTML this Canvas stored for this Window.
               node.innerHTML = html();

@@ -1,8 +1,9 @@
 import type { Sandbox, WindowRec } from "./api";
 
 const item =
-  "block w-full cursor-pointer border-0 bg-transparent px-3 py-0.5 text-left font-twm text-[13px] font-bold text-white hover:bg-twm-hi disabled:cursor-default disabled:text-twm-muted";
-const head = "px-3 py-0.5 font-twm text-[11px] font-bold text-twm-muted";
+  "flex h-[26px] w-full cursor-pointer items-center border-0 bg-transparent px-3.5 text-left font-twm text-[13px] leading-4 font-medium text-white hover:bg-white/16 disabled:cursor-default disabled:text-twm-muted disabled:hover:bg-transparent";
+const head =
+  "flex h-6 items-center px-3.5 font-twm text-[11px] leading-[14px] font-medium tracking-[0.04em] text-twm-muted uppercase";
 
 export function RootMenu(props: {
   x: number;
@@ -41,18 +42,20 @@ export function RootMenu(props: {
   const running = () => sb()?.state === "running";
   return (
     <div
-      class="absolute z-[100000] min-w-52 border border-neutral-800 bg-twm text-white shadow-[1px_1px_0_#000]"
+      class="twm-sheen twm-menu-float absolute z-[100000] flex w-[248px] flex-col text-white"
       style={{ left: `${props.x}px`, top: `${props.y}px` }}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div class="px-2.5 py-0.5 font-bold text-white">snowbox</div>
+      <div class="flex h-7 items-center px-3.5 text-[13px] leading-4 font-medium tracking-[0.08em] text-white uppercase">
+        snowbox
+      </div>
       <button type="button" class={item} onClick={() => go(props.onNewSandbox)}>
         New Sandbox
       </button>
       <button type="button" class={item} onClick={() => go(props.onSandboxes)}>
         Sandboxes…
       </button>
-      <div class="my-0.5 h-px bg-twm-line" />
+      <div class="h-px bg-twm-line" />
       <div class={head}>{sb() ? `Sandbox ${sbName()}` : "no Sandbox selected"}</div>
       <button
         type="button"
@@ -102,7 +105,7 @@ export function RootMenu(props: {
       <button type="button" class={item} onClick={() => go(props.onHosts)}>
         Hosts…
       </button>
-      <div class="my-0.5 h-px bg-twm-line" />
+      <div class="h-px bg-twm-line" />
       <div class={head}>{win() ? winTitle() : "no Window selected"}</div>
       <button type="button" class={item} disabled={!win()} onClick={() => go(props.onIconify)}>
         Iconify {winTitle()}
@@ -116,7 +119,7 @@ export function RootMenu(props: {
       <button type="button" class={item} disabled={!win()} onClick={() => go(props.onCloseWindow)}>
         Close {winTitle()}
       </button>
-      <div class="my-0.5 h-px bg-twm-line" />
+      <div class="h-px bg-twm-line" />
       <button type="button" class={item} onClick={() => go(props.onToggleIcons)}>
         {props.iconMgr ? "Hide Icon Manager" : "Show Icon Manager"}
       </button>

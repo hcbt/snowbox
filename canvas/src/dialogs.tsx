@@ -18,10 +18,11 @@ import { overlayZ, type Overlay } from "./overlay";
 import type { HostRec } from "./hosts";
 
 const field =
-  "mt-0.5 w-full box-border border border-neutral-600 px-1 py-0.5 font-mono text-[13px]";
-const label = "mt-1.5 block font-bold";
+  "mt-0.5 w-full box-border border border-twm-line bg-night-raised px-1 py-0.5 font-mono text-[13px] text-night-text";
+const label = "mt-1.5 block font-medium";
 const pickItem =
   "block w-full px-1 py-0.5 text-left font-mono text-[13px] hover:bg-twm-hi hover:text-white";
+const push = "border border-twm-line bg-twm px-3 py-0.5 font-medium text-white active:scale-[0.97]";
 
 type PickOption = { value: string; label: string };
 
@@ -59,20 +60,19 @@ function FieldSelect(props: {
     <div class="relative mt-0.5" onMouseDown={(e) => e.stopPropagation()}>
       <button
         type="button"
-        class={`${field} mt-0 flex items-center justify-between gap-2 bg-white text-left`}
+        class={`${field} mt-0 flex items-center justify-between gap-2 text-left`}
         onClick={() => setOpen(!open())}
       >
         <span class="min-w-0 truncate">{current()}</span>
         <span class="shrink-0 text-[10px] leading-none">{open() ? "▴" : "▾"}</span>
       </button>
       <Show when={open()}>
-        <div class="absolute top-full left-0 z-40 max-h-40 w-full overflow-auto border border-neutral-600 border-t-0 bg-white">
+        <div class="absolute top-full left-0 z-40 max-h-40 w-full overflow-auto border border-twm-line border-t-0 bg-night-raised">
           <For each={props.options} keyed={(o) => o.value}>
             {(o) => (
               <button
                 type="button"
-                class={pickItem}
-                classList={{ "bg-twm text-white": o().value === props.value }}
+                class={`${pickItem}${o().value === props.value ? " bg-twm text-white" : ""}`}
                 onClick={() => {
                   props.onChange(o().value);
                   setOpen(false);
@@ -236,7 +236,7 @@ export function OverlayDialog(props: {
       onClose={props.close}
     >
       <form
-        class="flex h-full min-h-0 flex-col bg-white font-twm text-black"
+        class="flex h-full min-h-0 flex-col bg-night-surface font-twm text-night-text"
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
@@ -282,19 +282,11 @@ export function OverlayDialog(props: {
           />
         </div>
         <Show when={props.overlay.kind !== "sandboxes"}>
-          <div class="flex shrink-0 justify-end gap-2 border-t border-neutral-300 px-3.5 py-2">
-            <button
-              type="button"
-              class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
-              onClick={props.close}
-            >
+          <div class="flex shrink-0 justify-end gap-2 border-t border-twm-line px-3.5 py-2">
+            <button type="button" class={push} onClick={props.close}>
               Cancel
             </button>
-            <button
-              type="submit"
-              class="border border-twm-line bg-twm px-3 py-0.5 font-bold text-white"
-              disabled={props.busy}
-            >
+            <button type="submit" class={push} disabled={props.busy}>
               {submitLabel(props.overlay.kind, sbName())}
             </button>
           </div>
@@ -619,21 +611,21 @@ function OverlayFields(props: {
 
 function HostList(props: { hosts: HostRec[]; onDetach?: (id: string) => void }) {
   return (
-    <div class="max-h-64 overflow-y-auto border border-neutral-400">
+    <div class="max-h-64 overflow-y-auto border border-twm-line">
       <For
         each={props.hosts}
         keyed={(h) => h.id}
-        fallback={<div class="px-2 py-1 text-[12px]">no Hosts Attached</div>}
+        fallback={<div class="px-2 py-1 text-[12px] text-twm-muted">no Hosts Attached</div>}
       >
         {(h) => (
-          <div class="flex items-center justify-between gap-2 border-t border-neutral-300 px-2 py-1">
+          <div class="flex items-center justify-between gap-2 border-t border-twm-line px-2 py-1">
             <div class="min-w-0">
-              <div class="truncate font-bold">{h().label}</div>
-              <div class="truncate text-[12px]">{h().url}</div>
+              <div class="truncate font-medium">{h().label}</div>
+              <div class="truncate text-[12px] text-twm-muted">{h().url}</div>
             </div>
             <button
               type="button"
-              class="shrink-0 border border-twm-line bg-twm px-2 py-0.5 font-bold text-white"
+              class="shrink-0 border border-twm-line bg-twm px-2 py-0.5 font-medium text-white"
               onClick={() => props.onDetach?.(h().id)}
             >
               Detach
@@ -647,19 +639,19 @@ function HostList(props: { hosts: HostRec[]; onDetach?: (id: string) => void }) 
 
 function SandboxList(props: { sandboxes: Sandbox[]; pick: (id: string) => void }) {
   return (
-    <div class="max-h-64 overflow-y-auto border border-neutral-400">
+    <div class="max-h-64 overflow-y-auto border border-twm-line">
       <For
         each={props.sandboxes}
         keyed={(s) => s.id}
-        fallback={<div class="px-2 py-1 text-[12px]">no Sandboxes</div>}
+        fallback={<div class="px-2 py-1 text-[12px] text-twm-muted">no Sandboxes</div>}
       >
         {(s) => (
           <button
             type="button"
-            class="block w-full border-0 border-t border-neutral-300 bg-white px-2 py-1 text-left hover:bg-twm-hi hover:text-white"
+            class="block w-full border-0 border-t border-twm-line bg-night-surface px-2 py-1 text-left hover:bg-twm-hi hover:text-white"
             onClick={() => props.pick(s().id)}
           >
-            <span class="font-bold">{s().name}</span>
+            <span class="font-medium">{s().name}</span>
             <span class="ml-2 text-[12px]">{s().state}</span>
           </button>
         )}
@@ -717,7 +709,7 @@ function NewSandboxFields(props: {
           }}
         />
       </div>
-      <label class="mt-2 flex items-center gap-2 font-bold">
+      <label class="mt-2 flex items-center gap-2 font-medium">
         <input
           type="checkbox"
           checked={props.customize}
@@ -833,7 +825,7 @@ function OptionField(props: {
   const value = () => getField(props.cur, opt().name);
   if (opt().type === "boolean") {
     return (
-      <label class="mt-1.5 flex items-center gap-2 font-bold">
+      <label class="mt-1.5 flex items-center gap-2 font-medium">
         <input
           type="checkbox"
           checked={Boolean(value())}
@@ -858,7 +850,7 @@ function OptionField(props: {
                 <span class="font-mono">{name}</span>
                 <button
                   type="button"
-                  class="border border-twm-line bg-twm px-2 py-0.5 font-bold text-white"
+                  class="border border-twm-line bg-twm px-2 py-0.5 font-medium text-white"
                   onClick={() => {
                     props.onSet(
                       setField(
@@ -884,7 +876,7 @@ function OptionField(props: {
           />
           <button
             type="button"
-            class="border border-twm-line bg-twm px-2 py-0.5 font-bold text-white"
+            class="border border-twm-line bg-twm px-2 py-0.5 font-medium text-white"
             onClick={() => {
               const name = draftName();
               if (!name || invalid()) return;
@@ -900,7 +892,7 @@ function OptionField(props: {
           </button>
         </div>
         <Show when={invalid()}>
-          <p class="text-[12px] text-red-700">invalid package name</p>
+          <p class="text-[12px] text-red-400">invalid package name</p>
         </Show>
       </div>
     );
@@ -935,7 +927,7 @@ function OptionField(props: {
           />
           <button
             type="button"
-            class="border border-twm-line bg-twm px-2 py-0.5 font-bold text-white"
+            class="border border-twm-line bg-twm px-2 py-0.5 font-medium text-white"
             onClick={() => {
               const k = draft().trim();
               if (!k) return;
@@ -994,7 +986,7 @@ function EnvironmentFields(props: {
   return (
     <>
       <Show when={props.optErr}>
-        <p class="text-[12px] text-red-700">{props.optErr}</p>
+        <p class="text-[12px] text-red-400">{props.optErr}</p>
       </Show>
       <p class="text-[12px]">
         devenv is always in the Environment. Keys are not stored in the recipe.
@@ -1009,8 +1001,8 @@ function EnvironmentFields(props: {
           const cur = () => props.envCfg[name] ?? {};
           const enabled = () => Boolean(cur().enable);
           return (
-            <div class="mt-2 border-t border-neutral-300 pt-2">
-              <label class="flex items-center gap-2 font-bold">
+            <div class="mt-2 border-t border-twm-line pt-2">
+              <label class="flex items-center gap-2 font-medium">
                 <input
                   type="checkbox"
                   checked={enabled()}
@@ -1024,7 +1016,7 @@ function EnvironmentFields(props: {
                 />
                 {name}
               </label>
-              <div class="text-[11px] text-neutral-600">{p().description}</div>
+              <div class="text-[11px] text-twm-muted">{p().description}</div>
               <For each={p().options.filter((o) => o.name !== "enable")} keyed={(o) => o.name}>
                 {(o) => (
                   <OptionField
