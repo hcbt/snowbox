@@ -29,7 +29,9 @@ import {
   applyFetchedLayout,
   defaultLayout,
   defaultLog,
+  loadChrome,
   readCachedSnap,
+  saveChrome,
   sameLayout,
   sameLines,
   sameSandboxes,
@@ -47,6 +49,24 @@ function persistRoster(hosts: HostRec[]): void {
   saveRoster(storage, hosts);
 }
 
+function persistChrome(layout: Layout): void {
+  const storage = globalThis.localStorage;
+  if (!storage) return;
+  saveChrome(storage, {
+    icon_manager: layout.icon_manager,
+    log: layout.log ?? defaultLog(),
+  });
+}
+
+function readChrome(fallback?: Layout) {
+  return loadChrome(
+    globalThis.localStorage,
+    fallback
+      ? { icon_manager: fallback.icon_manager, log: fallback.log ?? defaultLog() }
+      : undefined,
+  );
+}
+
 function clientFor(hosts: HostRec[], hostId?: string) {
   const h = hosts.find((x) => x.id === hostId) ?? hosts[0];
   if (!h) return api;
@@ -60,6 +80,11 @@ function overlayId(ov: Overlay): string | undefined {
 
 function hostById(hosts: HostRec[], id?: string): HostRec | undefined {
   return hosts.find((h) => h.id === id) ?? hosts[0];
+}
+
+function stripHost(w: WindowRec): WindowRec {
+  const { host: _host, ...rest } = w;
+  return rest;
 }
 
 function focusTerm(id: string): void {
@@ -86,6 +111,7 @@ export function App() {
   const commit = (next: Layout) => {
     setLayout(next);
     writeCachedLayout(next);
+    persistChrome(next);
   };
 
   const logRec = () => layout().log ?? defaultLog();
@@ -102,7 +128,13 @@ export function App() {
       writeCachedSandboxes(s.sandboxes);
     }
     const ids = new Set(s.sandboxes.map((b) => b.id));
-    const next = applyFetchedLayout(layout(), l, ids, interacting());
+    const chrome = readChrome(layout());
+    const fetched: Layout = {
+      windows: l.windows,
+      icon_manager: chrome.icon_manager,
+      log: chrome.log,
+    };
+    const next = applyFetchedLayout(layout(), fetched, ids, interacting());
     if (!sameLayout(layout(), next)) commit(next);
     setReady(true);
   };
@@ -180,7 +212,7 @@ export function App() {
       writeCachedSandboxes(allSb);
     }
     const ids = new Set(allSb.map((b) => b.id));
-    const chrome = parts.find((p) => p.ok)?.layout ?? defaultLayout();
+    const chrome = readChrome(layout());
     const fetched: Layout = {
       windows: allWin,
       icon_manager: chrome.icon_manager,
@@ -205,10 +237,14 @@ export function App() {
     if (!ready()) return;
     commit(next);
     const roster = hosts();
-    const chromeId = roster[0]?.id;
     if (roster.length === 0) {
       try {
-        await api.saveLayout(next);
+        const dummy = defaultLayout();
+        await api.saveLayout({
+          windows: next.windows.map(stripHost),
+          icon_manager: dummy.icon_manager,
+          log: dummy.log,
+        });
       } catch (e) {
         setStatus(String(e));
       }
@@ -219,18 +255,17 @@ export function App() {
         roster.map((h) => {
           const prev = hostLayouts.get(h.id) ?? defaultLayout();
           const windows = next.windows
-            .filter((w) => w.host === h.id || (!w.host && h.id === chromeId))
+            .filter((w) => w.host === h.id)
             .map((w) => {
-              const { host: _host, ...rest } = w;
+              const rest = stripHost(w);
               const raw = prev.windows.find((p) => p.id === rest.id);
               return { ...rest, title: raw?.title ?? rest.title };
             });
-          const layoutForHost: Layout = {
+          return apiOn(hostScope(h.url, h.token)).saveLayout({
             windows,
-            icon_manager: h.id === chromeId ? next.icon_manager : prev.icon_manager,
-            log: h.id === chromeId ? next.log : prev.log,
-          };
-          return apiOn(hostScope(h.url, h.token)).saveLayout(layoutForHost);
+            icon_manager: prev.icon_manager,
+            log: prev.log,
+          });
         }),
       );
     } catch (e) {

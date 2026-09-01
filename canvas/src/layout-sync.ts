@@ -45,6 +45,50 @@ export function normalizeLayout(fetched: Layout, sandboxIds: Set<string>): Layou
   };
 }
 
+export const CHROME_KEY = "snowbox.chrome";
+
+export type CanvasChrome = {
+  icon_manager: Layout["icon_manager"];
+  log: LogRec;
+};
+
+export function defaultChrome(): CanvasChrome {
+  return {
+    icon_manager: defaultLayout().icon_manager,
+    log: defaultLog(),
+  };
+}
+
+export function loadChrome(
+  storage: Pick<Storage, "getItem"> | undefined,
+  fallback?: CanvasChrome,
+): CanvasChrome {
+  const seed = fallback ?? defaultChrome();
+  if (!storage) return seed;
+  try {
+    const raw = storage.getItem(CHROME_KEY);
+    if (!raw) return seed;
+    // SAFETY: saveChrome writes CanvasChrome.
+    const parsed = JSON.parse(raw) as CanvasChrome;
+    return {
+      icon_manager: normalizeIcon(parsed.icon_manager ?? seed.icon_manager),
+      log: normalizeLog(parsed.log ?? seed.log),
+    };
+  } catch {
+    return seed;
+  }
+}
+
+export function saveChrome(storage: Pick<Storage, "setItem">, chrome: CanvasChrome): void {
+  storage.setItem(
+    CHROME_KEY,
+    JSON.stringify({
+      icon_manager: normalizeIcon(chrome.icon_manager),
+      log: normalizeLog(chrome.log),
+    }),
+  );
+}
+
 const SNAP_CACHE = "snowbox.canvas";
 const LEGACY_LAYOUT_CACHE = "snowbox.layout";
 

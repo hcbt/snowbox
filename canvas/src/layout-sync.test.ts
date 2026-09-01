@@ -1,7 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import type { Layout, WindowRec } from "./api";
 import type { Sandbox } from "./api";
-import { applyFetchedLayout, defaultLog, sameLayout, sameLines, sandboxLive } from "./layout-sync";
+import {
+  applyFetchedLayout,
+  defaultChrome,
+  defaultLog,
+  loadChrome,
+  saveChrome,
+  sameLayout,
+  sameLines,
+  sandboxLive,
+} from "./layout-sync";
 
 const win = (over: Partial<WindowRec> & Pick<WindowRec, "id" | "sandbox">): WindowRec => ({
   title: over.id,
@@ -124,5 +133,30 @@ describe("sameLayout", () => {
       windows: [win({ id: "w1", sandbox: "s1", x: 501, y: 80 })],
     });
     expect(sameLayout(a, b)).toBe(false);
+  });
+});
+
+describe("canvas chrome", () => {
+  test("roundtrip Icon Manager and log", () => {
+    const store: Record<string, string> = {};
+    const chrome = {
+      icon_manager: { x: 40, y: 12, w: 200, h: 240, visible: false },
+      log: { x: 10, y: 20, w: 560, h: 280, visible: true },
+    };
+    saveChrome(
+      {
+        setItem: (k, v) => {
+          store[k] = v;
+        },
+      },
+      chrome,
+    );
+    const loaded = loadChrome({ getItem: (k) => store[k] ?? null });
+    expect(loaded.icon_manager.x).toBe(40);
+    expect(loaded.log.visible).toBe(true);
+  });
+
+  test("missing storage uses defaults", () => {
+    expect(loadChrome(undefined)).toEqual(defaultChrome());
   });
 });
