@@ -67,11 +67,11 @@ Per-Sandbox CPU, RAM, and disk caps, set in the UI at create and editable later.
 _Avoid_: quota, cgroup, resources (when you mean this)
 
 **Canvas**:
-The browser UI. One surface: Sandboxes are Windows on it. It may be Attached to several Hosts at once. Agent configuration, Templates, Limits, Attach, Detach, recents, and Discovery are overlays on that surface, not other home screens. Hosts are not objects on the surface. When more than one Host is Attached, a Window names its Host. There is no Package catalog. The Canvas is not a Host. v1 is one Host, opened as that Daemon’s URL on loopback.
+The browser UI. One surface: Sandboxes are Windows on it. It may be Attached to several Hosts at once. Agent configuration, Templates, Limits, Attach, and Hosts (Detach lives there) are overlays on that surface, not other home screens. Discovery is not an overlay. Hosts are not objects on the surface. When more than one Host is Attached, a Window names its Host. Icon Manager and the log belong to this Canvas, not to a Host. There is no Package catalog. The Canvas is not a Host. v1 is one Host, opened as that Daemon’s URL on loopback.
 _Avoid_: dashboard, lobby, desktop, IDE, workspace (that is files), hatch
 
 **Attach**:
-An explicit action that lets this Canvas call that Host’s Daemon. Requires that Host’s token. Does not start Sandboxes. Opening the Canvas URL is not Attach. The roster belongs to this Canvas (this browser, this origin), not to a Host; clearing the origin is Detach-all. The Host that served the page is not special.
+An explicit action that lets this Canvas call that Host’s Daemon. Requires that Host’s token. Does not start Sandboxes. Opening a LAN URL is not Attach. Opening loopback may put this Host on the list (the page may include the token). The roster belongs to this Canvas (this browser, this origin), not to a Host; clearing the origin is Detach-all. The Host that served the page is not special.
 _Avoid_: connect, pair, login, link, add server
 
 **Detach**:
@@ -87,5 +87,5 @@ A Snowbox-owned terminal attached to one Sandbox, a free-floating rectangle on t
 _Avoid_: pane, tab, session, tmux, xterm, PTY (as a GUI noun)
 
 **Layout**:
-The Host-side arrangement of that Host’s Windows — which exist, position, size, stacking. The Daemon stores it. The Sandbox does not know about it. A Canvas Attached to several Hosts composites those Layouts.
+The Host-side arrangement of that Host’s Windows — which exist, position, size, stacking. The Daemon stores it. The Sandbox does not know about it. A Canvas Attached to several Hosts composites those Layouts. Icon Manager and the log are Canvas chrome, stored with this browser, not in a Host Layout.
 _Avoid_: session, workspace, desktop
