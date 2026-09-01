@@ -1,22 +1,22 @@
 # Snowbox
 
-A local tool that runs a coding Agent inside a Sandbox on your Host, so the Agent does not use the Host as its computer.
+A local tool that runs a coding Agent inside a Sandbox on a Host, so the Agent does not use the Host as its computer.
 
-v1 is local-only: one person, one Host. A multi-tenant cloud platform is a later product, not this one. The Daemon has a documented API bound to `127.0.0.1`; other programs on this Host may call it with the token. That is a local integration surface, not the platform.
+v1 is local-only: one person, one Host. Later is one person, many Hosts they own, one Canvas. A multi-tenant cloud platform is a different later product, not this one. The Daemon has a documented API bound to `127.0.0.1` in v1; other programs on this Host may call it with the token. That is a local integration surface, not the platform.
 
 ## Language
 
 **Host**:
-The computer Snowbox is installed on. The human uses the Host; the Agent does not. A v1 Host is macOS or Linux. macOS is first. Snowbox itself is a Nix program the user runs; not an `.app`, not an installer.
-_Avoid_: local machine, laptop, server
+A computer that runs a Daemon. Each Host has an id the Daemon creates on first start; the Canvas may show a label. Address is how you reach it this time. The human may use a browser that is not on this computer. A v1 Host is macOS or Linux. macOS is first. Snowbox itself is a Nix program the user runs; not an `.app`, not an installer. The computer showing the Canvas is not a Host unless it also runs a Daemon.
+_Avoid_: local machine, laptop, server, the browser's machine, hostname (as identity)
 
 **Sandbox**:
-A persistent isolated Nix-built Linux environment on the Host. GPU in the Sandbox is out of v1 planning (research later, not a promise). You start, stop, reset, and destroy a Sandbox. Snowbox is the product; a Sandbox is one running or stopped instance. A Sandbox may run zero or more Agents; they share Workspace, Home, and Environment and can conflict. Many Sandboxes may run at once; they do not share filesystem or network with each other. They may copy from the Cache. You work in a Sandbox through its Windows on the Canvas. SSH and editor-remote are possible if the Environment contains the usual Unix packages; they are not Snowbox features. A Sandbox port is closed to the Host until explicitly Published.
+A persistent isolated Nix-built Linux environment on one Host. A Sandbox belongs to exactly one Host. GPU in the Sandbox is out of v1 planning (research later, not a promise). You start, stop, reset, and destroy a Sandbox. Snowbox is the product; a Sandbox is one running or stopped instance. A Sandbox may run zero or more Agents; they share Workspace, Home, and Environment and can conflict. Many Sandboxes may run at once; they do not share filesystem or network with each other. They may copy from the Cache. You work in a Sandbox through its Windows on the Canvas. SSH and editor-remote are possible if the Environment contains the usual Unix packages; they are not Snowbox features. New Sandbox names a Host; Templates, Cache, Limits, and the guest runtime are that Host’s.
 _Avoid_: guest, VM, microVM, container, box, machine, environment (for the instance), NixOS (as a button), Ubuntu
 
 **Workspace**:
-The project files stored on a Sandbox’s own disk at `/workspace`. Exactly one Workspace per Sandbox. The Sandbox is the source of truth. The Host has no live view of these files. Copy-in and copy-out are explicit Host actions, never a background sync. Copy-in or copy-out into a non-empty destination is refused unless the user confirms replace (no merge).
-_Avoid_: mount, share, project folder, repo (when you mean the Workspace as a whole)
+The project files stored on a Sandbox’s own disk at `/workspace`. Exactly one Workspace per Sandbox. The Sandbox is the source of truth. The Host has no live view of these files. Files enter from inside the Sandbox. v1 still has copy-in/out; they go.
+_Avoid_: mount, share, project folder, repo (when you mean the Workspace as a whole), copy-in, copy-out
 
 **Home**:
 The Linux user home inside the Sandbox. Stop keeps it on disk. Reset wipes it (logins, extra files, `.gitconfig`). There is no keep-list of paths that survive Reset.
@@ -27,11 +27,11 @@ A command that runs *inside* a Sandbox and drives coding work. First-class Agent
 _Avoid_: bot, assistant, LLM, model (as product nouns)
 
 **Daemon**:
-The Host process that owns Sandboxes and serves the Canvas. Closing the browser does not stop Sandboxes or forget Layout. Quitting the Daemon writes machine state and stops running guests; disks, Layout, and that state stay. It exposes a documented API on `127.0.0.1`. Callers need a token stored in the user’s config; loopback is not auth. Remote machines are not callers. It is the only writer of the Cache.
+The Host process that owns that Host’s Sandboxes, Cache, Environment, Layout, and token, and serves the Canvas files plus the API. Closing the browser does not stop Sandboxes or forget Layout. Quitting the Daemon writes machine state and stops running guests; disks, Layout, and that state stay. Callers present the token from that Host’s user config. Loopback is not auth. v1 binds `127.0.0.1`; callers are on this Host. Later, callers may be a Canvas the person Attached from another machine. It is the only writer of the Cache on this Host.
 _Avoid_: server, backend, engine, runtime, app (when you mean this process), platform, cloud
 
 **Cache**:
-A Snowbox-managed store on the Host of Environment closures already fetched. Separate from the Host user’s Nix store. Each Sandbox has its own store and copies from the Cache instead of downloading again. Sandboxes cannot write the Cache. In-guest Nix builds may read it; they do not publish back. v1 warms it when the Daemon realizes an Environment.
+A Snowbox-managed store on that Host of Environment closures already fetched. Separate from the Host user’s Nix store. Each Host has its own Cache. Each Sandbox has its own store and copies from the Cache instead of downloading again. Sandboxes cannot write the Cache. In-guest Nix builds may read it; they do not publish back. v1 warms it when the Daemon realizes an Environment.
 _Avoid_: /nix/store, substituter, binary cache, shared store, mount
 
 **Template**:
@@ -51,11 +51,11 @@ Write the Sandbox’s machine state and keep its disk: Workspace, Linux home, En
 _Avoid_: pause, freeze, suspend (as GUI nouns)
 
 **Destroy**:
-Delete a Sandbox. Workspace is gone unless copy-out already happened. The only verb that deletes the Workspace.
+Delete a Sandbox. Workspace is gone. The only verb that deletes the Workspace.
 _Avoid_: remove, delete, rm, reset
 
 **Publish**:
-An explicit user action that maps a Sandbox port onto `127.0.0.1` on the Host so a Host browser can open a server the Agent started. Default is not published. Not bound on the LAN.
+v1 maps a Sandbox port onto `127.0.0.1` on the Host so a Host browser can open a server the Agent started. Default closed. Not on the LAN. Goes; not part of later.
 _Avoid_: expose, forward, ingress, port map
 
 **Secret**:
@@ -67,13 +67,25 @@ Per-Sandbox CPU, RAM, and disk caps, set in the UI at create and editable later.
 _Avoid_: quota, cgroup, resources (when you mean this)
 
 **Canvas**:
-The Host browser UI. One surface: Sandboxes are Windows on it. Agent configuration, Templates, Limits, copy-in/out, and Publish are overlays on that surface, not other home screens. There is no Package catalog.
+The browser UI. One surface: Sandboxes are Windows on it. It may be Attached to several Hosts at once. Agent configuration, Templates, Limits, Attach, Detach, recents, and Discovery are overlays on that surface, not other home screens. Hosts are not objects on the surface. When more than one Host is Attached, a Window names its Host. There is no Package catalog. The Canvas is not a Host. v1 is one Host, opened as that Daemon’s URL on loopback.
 _Avoid_: dashboard, lobby, desktop, IDE, workspace (that is files), hatch
 
+**Attach**:
+An explicit action that lets this Canvas call that Host’s Daemon. Requires that Host’s token. Does not start Sandboxes. Opening the Canvas URL is not Attach. The roster belongs to this Canvas (this browser, this origin), not to a Host; clearing the origin is Detach-all. The Host that served the page is not special.
+_Avoid_: connect, pair, login, link, add server
+
+**Detach**:
+Forget that Host in this Canvas. Sandboxes on that Host keep running. Unreachable is still Attached until Detach.
+_Avoid_: disconnect, logout, unpair
+
+**Discovery**:
+Finding Hosts this Canvas already Attached, including when their address changed. Does not Attach. Does not list strangers.
+_Avoid_: mDNS, Bonjour, browse, scan, LAN find
+
 **Window**:
-A Snowbox-owned terminal attached to one Sandbox, a free-floating rectangle on the Canvas. A Sandbox may have several. Opening one starts a shell in that Sandbox; closing it ends that shell, not the Sandbox. A control on the Window frame opens that Sandbox’s Environment form. Not an Agent.
+A Snowbox-owned terminal attached to one Sandbox, a free-floating rectangle on the Canvas. A Sandbox may have several. Opening one starts a shell in that Sandbox; closing it ends that shell, not the Sandbox. A control on the Window frame opens that Sandbox’s Environment form. When more than one Host is Attached, a Window names its Host. Not an Agent.
 _Avoid_: pane, tab, session, tmux, xterm, PTY (as a GUI noun)
 
 **Layout**:
-The Host-side arrangement of Windows — which exist, position, size, stacking. The Daemon stores it. The Sandbox does not know about it.
+The Host-side arrangement of that Host’s Windows — which exist, position, size, stacking. The Daemon stores it. The Sandbox does not know about it. A Canvas Attached to several Hosts composites those Layouts.
 _Avoid_: session, workspace, desktop
