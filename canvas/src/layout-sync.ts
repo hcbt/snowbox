@@ -37,9 +37,20 @@ function normalizeIcon(im: Layout["icon_manager"]): Layout["icon_manager"] {
   };
 }
 
+export function firstById<T extends { id: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const item of items) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    out.push(item);
+  }
+  return out;
+}
+
 export function normalizeLayout(fetched: Layout, sandboxIds: Set<string>): Layout {
   return {
-    windows: fetched.windows.filter((w) => sandboxIds.has(w.sandbox)),
+    windows: firstById(fetched.windows.filter((w) => sandboxIds.has(w.sandbox))),
     icon_manager: normalizeIcon(fetched.icon_manager),
     log: normalizeLog(fetched.log),
   };
@@ -148,11 +159,11 @@ function readSnapRaw(): CanvasSnap | null {
       if (!parsed.layout || !Array.isArray(parsed.layout.windows)) return null;
       return {
         layout: {
-          windows: parsed.layout.windows,
+          windows: firstById(parsed.layout.windows),
           icon_manager: normalizeIcon(parsed.layout.icon_manager),
           log: normalizeLog(parsed.layout.log),
         },
-        sandboxes: Array.isArray(parsed.sandboxes) ? parsed.sandboxes : [],
+        sandboxes: firstById(Array.isArray(parsed.sandboxes) ? parsed.sandboxes : []),
         logLines: Array.isArray(parsed.logLines) ? parsed.logLines : [],
         termPosters: Array.isArray(parsed.termPosters) ? parsed.termPosters : [],
       };
@@ -164,7 +175,7 @@ function readSnapRaw(): CanvasSnap | null {
     if (!Array.isArray(layout.windows) || layout.icon_manager == null) return null;
     return {
       layout: {
-        windows: layout.windows,
+        windows: firstById(layout.windows),
         icon_manager: normalizeIcon(layout.icon_manager),
         log: normalizeLog(layout.log),
       },

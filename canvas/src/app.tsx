@@ -27,6 +27,7 @@ import { sandboxesWithoutWindows } from "./sandbox-icons";
 import { menuHit, type MenuHit } from "./menu-target";
 import {
   applyFetchedLayout,
+  firstById,
   defaultLayout,
   defaultLog,
   loadChrome,
@@ -207,14 +208,16 @@ export function App() {
         });
       }
     }
-    if (!sameSandboxes(sandboxes(), allSb)) {
-      setSandboxes(allSb);
-      writeCachedSandboxes(allSb);
+    const uniqueSb = firstById(allSb);
+    const uniqueWin = firstById(allWin);
+    if (!sameSandboxes(sandboxes(), uniqueSb)) {
+      setSandboxes(uniqueSb);
+      writeCachedSandboxes(uniqueSb);
     }
-    const ids = new Set(allSb.map((b) => b.id));
+    const ids = new Set(uniqueSb.map((b) => b.id));
     const chrome = readChrome(layout());
     const fetched: Layout = {
-      windows: allWin,
+      windows: uniqueWin,
       icon_manager: chrome.icon_manager,
       log: chrome.log,
     };

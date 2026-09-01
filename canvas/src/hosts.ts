@@ -24,6 +24,28 @@ export function normalizeUrl(raw: string): string {
   return u.origin;
 }
 
+export function compactRoster(hosts: HostRec[]): HostRec[] {
+  let out: HostRec[] = [];
+  for (const h of hosts) {
+    out = upsertHost(out, h);
+  }
+  return out;
+}
+
+function hostUrlKey(url: string): string {
+  try {
+    return normalizeUrl(url);
+  } catch {
+    return url;
+  }
+}
+
+function preferHost(a: HostRec, b: HostRec): HostRec {
+  if (a.id === "origin" && b.id !== "origin") return b;
+  if (b.id === "origin" && a.id !== "origin") return a;
+  return b;
+}
+
 export function loadRoster(storage: Pick<Storage, "getItem"> | undefined): HostRec[] {
   if (!storage) return [];
   try {
@@ -32,7 +54,7 @@ export function loadRoster(storage: Pick<Storage, "getItem"> | undefined): HostR
     // SAFETY: saveRoster writes HostRec[]; missing fields are dropped below.
     const parsed = JSON.parse(raw) as HostRec[];
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((h) => h?.id && h.url && h.token && h.label);
+    return compactRoster(parsed.filter((h) => h?.id && h.url && h.token && h.label));
   } catch {
     return [];
   }
@@ -43,8 +65,10 @@ export function saveRoster(storage: Pick<Storage, "setItem">, hosts: HostRec[]):
 }
 
 export function upsertHost(hosts: HostRec[], next: HostRec): HostRec[] {
-  const rest = hosts.filter((h) => h.id !== next.id);
-  return [...rest, next];
+  const row = { ...next, url: hostUrlKey(next.url) };
+  const rest = hosts.filter((h) => h.id !== row.id && hostUrlKey(h.url) !== row.url);
+  const prev = hosts.find((h) => h.id === row.id || hostUrlKey(h.url) === row.url);
+  return [...rest, prev ? preferHost(prev, row) : row];
 }
 
 export function removeHost(hosts: HostRec[], id: string): HostRec[] {

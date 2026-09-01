@@ -59,6 +59,18 @@ describe("applyFetchedLayout", () => {
     expect(next.windows[0]?.y).toBe(40);
   });
 
+  test("keeps one Window when the same id is listed twice", () => {
+    const fetched = layout({
+      windows: [
+        win({ id: "w1", sandbox: "s1", title: "this Host — s1 — xterm" }),
+        win({ id: "w1", sandbox: "s1", title: "127.0.0.1 — s1 — xterm" }),
+      ],
+    });
+    const next = applyFetchedLayout(layout({ windows: [] }), fetched, new Set(["s1"]), false);
+    expect(next.windows).toHaveLength(1);
+    expect(next.windows[0]?.id).toBe("w1");
+  });
+
   test("drops Windows whose Sandbox is gone", () => {
     const fetched = layout({
       windows: [win({ id: "w1", sandbox: "gone" }), win({ id: "w2", sandbox: "s1", x: 10, y: 10 })],

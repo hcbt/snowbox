@@ -98,6 +98,11 @@
     );
   }
 
+  .twm-sheen > .twm-bar {
+    background-color: transparent;
+    background-image: none;
+  }
+
   .twm-sheen {
     background-color: var(--color-twm);
     background-image: radial-gradient(
@@ -127,6 +132,7 @@
 
   .twm-body-panel {
     background-color: transparent;
+    border-color: transparent;
   }
 
   .twm-win-icon {
