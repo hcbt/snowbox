@@ -26,8 +26,8 @@ export function RootMenu(props: {
   onLimits: () => void;
   onEnvironment: () => void;
   onTemplates: () => void;
-  onPublish: () => void;
-  onCopy: (dir: "in" | "out") => void;
+  onAttach: () => void;
+  onHosts: () => void;
   close: () => void;
 }) {
   const sb = () => props.sandbox;
@@ -96,29 +96,11 @@ export function RootMenu(props: {
       <button type="button" class={item} onClick={() => go(props.onTemplates)}>
         Templates…
       </button>
-      <button
-        type="button"
-        class={item}
-        disabled={!sb() || !running()}
-        onClick={() => go(props.onPublish)}
-      >
-        Publish {sbName()}…
+      <button type="button" class={item} onClick={() => go(props.onAttach)}>
+        Attach Host…
       </button>
-      <button
-        type="button"
-        class={item}
-        disabled={!sb() || running()}
-        onClick={() => go(() => props.onCopy("in"))}
-      >
-        Copy in to {sbName()}…
-      </button>
-      <button
-        type="button"
-        class={item}
-        disabled={!sb() || running()}
-        onClick={() => go(() => props.onCopy("out"))}
-      >
-        Copy out from {sbName()}…
+      <button type="button" class={item} onClick={() => go(props.onHosts)}>
+        Hosts…
       </button>
       <div class="my-0.5 h-px bg-twm-line" />
       <div class={head}>{win() ? winTitle() : "no Window selected"}</div>

@@ -50,7 +50,7 @@ pub trait Engine: Send + Sync {
     fn vsock(&self, id: Uuid, port: u32) -> Result<UnixStream, String>;
 }
 
-/// Guest control plane. Agent, Window PTY, and Publish talk through this
+/// Guest control plane. Agent and Window PTY talk through this
 /// and never to a hypervisor backend.
 pub trait Control: Send + Sync {
     fn vsock(&self, id: Uuid, port: u32) -> Result<UnixStream, String>;

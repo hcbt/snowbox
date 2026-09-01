@@ -1,3 +1,5 @@
+import { normalizeUrl, type HostRec } from "./hosts";
+
 export type Limits = { cpu: number; ram: number; disk: number };
 
 export type Sandbox = {
@@ -7,9 +9,8 @@ export type Sandbox = {
   booting?: boolean;
   home: string[];
   limits: Limits;
+  host?: string;
 };
-
-export type Published = { port: number; host_port: number; url: string };
 
 export type Template = { name: string; shipped: boolean };
 
@@ -46,6 +47,7 @@ export type WindowRec = {
   h: number;
   z: number;
   iconified: boolean;
+  host?: string;
 };
 
 export type LogRec = {
@@ -72,6 +74,28 @@ export function sessionToken(): string | undefined {
   return globalThis.window?.__SNOWBOX_TOKEN__;
 }
 
+export type Scope = { base: string; token: string };
+
+export function originScope(): Scope {
+  return { base: "", token: sessionToken() ?? "" };
+}
+
+export function hostScope(url: string, token: string): Scope {
+  return { base: url.replace(/\/+$/, ""), token };
+}
+
+export async function attachHost(url: string, token: string): Promise<HostRec> {
+  const base = normalizeUrl(url);
+  const rec = await json<{ id: string }>("/api/v1/host", undefined, hostScope(base, token));
+  let label = base;
+  try {
+    label = new URL(base).hostname;
+  } catch {
+    /* keep origin */
+  }
+  return { id: rec.id, url: base, token, label };
+}
+
 export function isJsonObject(value: Json | null): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -89,15 +113,19 @@ function errorMessage(statusText: string, body: Json | null): string {
   return statusText;
 }
 
-async function req(path: string, init: RequestInit = {}): Promise<Response> {
-  const token = sessionToken();
+async function req(
+  path: string,
+  init: RequestInit = {},
+  scope: Scope = originScope(),
+): Promise<Response> {
   const headers = new Headers(init.headers);
-  if (token) headers.set("authorization", `Bearer ${token}`);
+  if (scope.token) headers.set("authorization", `Bearer ${scope.token}`);
   if (init.body && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
-  return fetch(path, {
-    credentials: "same-origin",
+  const url = path.startsWith("http") ? path : `${scope.base}${path}`;
+  return fetch(url, {
+    credentials: scope.base ? "omit" : "same-origin",
     ...init,
     headers,
   });
@@ -116,8 +144,8 @@ async function failIfNotOk(r: Response): Promise<void> {
 }
 
 /** JSON body. 204 is an error here — use `empty` for no-content routes. */
-export async function json<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await req(path, init);
+export async function json<T>(path: string, init?: RequestInit, scope?: Scope): Promise<T> {
+  const r = await req(path, init, scope);
   await failIfNotOk(r);
   if (r.status === 204) {
     throw new Error("unexpected empty body");
@@ -132,8 +160,8 @@ export async function json<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** 204 / no JSON body. */
-export async function empty(path: string, init?: RequestInit): Promise<void> {
-  const r = await req(path, init);
+export async function empty(path: string, init?: RequestInit, scope?: Scope): Promise<void> {
+  const r = await req(path, init, scope);
   await failIfNotOk(r);
 }
 
@@ -148,69 +176,90 @@ function createSandboxBody(name?: string, template?: string, environment?: Envir
   return {};
 }
 
-export const api = {
-  sandboxes: () => json<{ sandboxes: Sandbox[] }>("/api/v1/sandboxes"),
-  create: (name?: string, template?: string, environment?: EnvironmentDoc) => {
-    const body = createSandboxBody(name, template, environment);
-    return json<Sandbox>("/api/v1/sandboxes", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-  },
-  templates: () => json<{ templates: Template[] }>("/api/v1/templates"),
-  template: (name: string) => json<EnvironmentDoc>(`/api/v1/templates/${name}`),
-  saveTemplateConfig: (name: string, config: EnvironmentDoc) =>
-    json<EnvironmentDoc>(`/api/v1/templates/${name}`, {
-      method: "PUT",
-      body: JSON.stringify(config),
-    }),
-  saveTemplate: (name: string, sandbox: string) =>
-    json<Template>("/api/v1/templates", {
-      method: "POST",
-      body: JSON.stringify({ name, sandbox }),
-    }),
-  published: (id: string) => json<{ published: Published[] }>(`/api/v1/sandboxes/${id}/publish`),
-  publish: (id: string, port: number, host_port?: number) =>
-    json<Published>(`/api/v1/sandboxes/${id}/publish`, {
-      method: "POST",
-      body: JSON.stringify({ port, host_port: host_port ?? null }),
-    }),
-  unpublish: (id: string, port: number) =>
-    empty(`/api/v1/sandboxes/${id}/publish/${port}`, { method: "DELETE" }),
-  start: (id: string) => json<Sandbox>(`/api/v1/sandboxes/${id}/start`, { method: "POST" }),
-  stop: (id: string) => json<Sandbox>(`/api/v1/sandboxes/${id}/stop`, { method: "POST" }),
-  reset: (id: string) => json<Sandbox>(`/api/v1/sandboxes/${id}/reset`, { method: "POST" }),
-  destroy: (id: string) => empty(`/api/v1/sandboxes/${id}`, { method: "DELETE" }),
-  layout: () => json<Layout>("/api/v1/layout"),
-  saveLayout: (layout: Layout) =>
-    json<Layout>("/api/v1/layout", {
-      method: "PUT",
-      body: JSON.stringify(layout),
-    }),
-  openWindow: (sandbox: string) =>
-    json<WindowRec>(`/api/v1/sandboxes/${sandbox}/windows`, { method: "POST" }),
-  closeWindow: (id: string) => empty(`/api/v1/windows/${id}`, { method: "DELETE" }),
-  patchLimits: (id: string, limits: Partial<Limits>) =>
-    json<Sandbox>(`/api/v1/sandboxes/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ limits }),
-    }),
-  agentOptions: () => json<{ programs: AgentProgram[] }>("/api/v1/agent-options"),
-  progress: () => json<{ lines: string[] }>("/api/v1/progress"),
-  environment: (id: string) => json<EnvironmentDoc>(`/api/v1/sandboxes/${id}/environment`),
-  saveEnvironment: (id: string, config: EnvironmentDoc) =>
-    json<EnvironmentDoc>(`/api/v1/sandboxes/${id}/environment`, {
-      method: "PUT",
-      body: JSON.stringify(config),
-    }),
-  copyIn: (id: string, from: string, replace: boolean) =>
-    json<Sandbox>(`/api/v1/sandboxes/${id}/copy-in`, {
-      method: "POST",
-      body: JSON.stringify({ from, replace }),
-    }),
-  copyOut: (id: string, to: string, replace: boolean) =>
-    json<Sandbox>(`/api/v1/sandboxes/${id}/copy-out`, {
-      method: "POST",
-      body: JSON.stringify({ to, replace }),
-    }),
-};
+export function apiOn(scope: Scope = originScope()) {
+  return {
+    host: () => json<{ id: string }>("/api/v1/host", undefined, scope),
+    discovery: () =>
+      json<{ hosts: { id: string; addresses: string[]; port: number }[] }>(
+        "/api/v1/discovery",
+        undefined,
+        scope,
+      ),
+    sandboxes: () => json<{ sandboxes: Sandbox[] }>("/api/v1/sandboxes", undefined, scope),
+    create: (name?: string, template?: string, environment?: EnvironmentDoc) => {
+      const body = createSandboxBody(name, template, environment);
+      return json<Sandbox>(
+        "/api/v1/sandboxes",
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+        },
+        scope,
+      );
+    },
+    templates: () => json<{ templates: Template[] }>("/api/v1/templates", undefined, scope),
+    template: (name: string) => json<EnvironmentDoc>(`/api/v1/templates/${name}`, undefined, scope),
+    saveTemplateConfig: (name: string, config: EnvironmentDoc) =>
+      json<EnvironmentDoc>(
+        `/api/v1/templates/${name}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(config),
+        },
+        scope,
+      ),
+    saveTemplate: (name: string, sandbox: string) =>
+      json<Template>(
+        "/api/v1/templates",
+        {
+          method: "POST",
+          body: JSON.stringify({ name, sandbox }),
+        },
+        scope,
+      ),
+    start: (id: string) =>
+      json<Sandbox>(`/api/v1/sandboxes/${id}/start`, { method: "POST" }, scope),
+    stop: (id: string) => json<Sandbox>(`/api/v1/sandboxes/${id}/stop`, { method: "POST" }, scope),
+    reset: (id: string) =>
+      json<Sandbox>(`/api/v1/sandboxes/${id}/reset`, { method: "POST" }, scope),
+    destroy: (id: string) => empty(`/api/v1/sandboxes/${id}`, { method: "DELETE" }, scope),
+    layout: () => json<Layout>("/api/v1/layout", undefined, scope),
+    saveLayout: (layout: Layout) =>
+      json<Layout>(
+        "/api/v1/layout",
+        {
+          method: "PUT",
+          body: JSON.stringify(layout),
+        },
+        scope,
+      ),
+    openWindow: (sandbox: string) =>
+      json<WindowRec>(`/api/v1/sandboxes/${sandbox}/windows`, { method: "POST" }, scope),
+    closeWindow: (id: string) => empty(`/api/v1/windows/${id}`, { method: "DELETE" }, scope),
+    patchLimits: (id: string, limits: Partial<Limits>) =>
+      json<Sandbox>(
+        `/api/v1/sandboxes/${id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ limits }),
+        },
+        scope,
+      ),
+    agentOptions: () =>
+      json<{ programs: AgentProgram[] }>("/api/v1/agent-options", undefined, scope),
+    progress: () => json<{ lines: string[] }>("/api/v1/progress", undefined, scope),
+    environment: (id: string) =>
+      json<EnvironmentDoc>(`/api/v1/sandboxes/${id}/environment`, undefined, scope),
+    saveEnvironment: (id: string, config: EnvironmentDoc) =>
+      json<EnvironmentDoc>(
+        `/api/v1/sandboxes/${id}/environment`,
+        {
+          method: "PUT",
+          body: JSON.stringify(config),
+        },
+        scope,
+      ),
+  };
+}
+
+export const api = apiOn();

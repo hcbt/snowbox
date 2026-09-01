@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { api, empty, json } from "./api";
+import { api, apiOn, empty, hostScope, json } from "./api";
 
 const originalFetch = globalThis.fetch;
 
@@ -94,29 +94,6 @@ describe("json / empty", () => {
   });
 });
 
-describe("api.unpublish", () => {
-  test("DELETE /sandboxes/{id}/publish/{port}", async () => {
-    const fn = stubFetch((url, init) => {
-      expect(url).toBe("/api/v1/sandboxes/sb1/publish/3000");
-      expect(init?.method).toBe("DELETE");
-      return new Response(null, { status: 204 });
-    });
-    await expect(api.unpublish("sb1", 3000)).resolves.toBeUndefined();
-    expect(fn).toHaveBeenCalledTimes(1);
-  });
-
-  test("throws on !ok", async () => {
-    stubFetch(
-      () =>
-        new Response(JSON.stringify({ error: "not_found", detail: "port not published" }), {
-          status: 404,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-    await expect(api.unpublish("sb1", 80)).rejects.toThrow("port not published");
-  });
-});
-
 describe("api.destroy / closeWindow", () => {
   test("destroy throws on DELETE !ok", async () => {
     stubFetch(
@@ -139,17 +116,18 @@ describe("api.destroy / closeWindow", () => {
   });
 });
 
-describe("api.publish", () => {
-  test("empty host port sends null", async () => {
-    stubFetch((url, init) => {
-      expect(url).toBe("/api/v1/sandboxes/sb1/publish");
-      expect(JSON.parse(String(init?.body))).toEqual({ port: 3000, host_port: null });
-      return new Response(
-        JSON.stringify({ port: 3000, host_port: 49152, url: "http://127.0.0.1:49152" }),
-        { status: 201, headers: { "content-type": "application/json" } },
-      );
+describe("apiOn", () => {
+  test("GET /host on another base", async () => {
+    const fn = stubFetch((url, init) => {
+      expect(url).toBe("http://10.0.0.2:5418/api/v1/host");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer tok");
+      return new Response(JSON.stringify({ id: "aaaa" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     });
-    const pub = await api.publish("sb1", 3000);
-    expect(pub.url).toBe("http://127.0.0.1:49152");
+    const rec = await apiOn(hostScope("http://10.0.0.2:5418", "tok")).host();
+    expect(rec.id).toBe("aaaa");
+    expect(fn).toHaveBeenCalled();
   });
 });

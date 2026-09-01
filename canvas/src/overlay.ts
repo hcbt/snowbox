@@ -5,8 +5,8 @@ export type Overlay =
   | { kind: "environment"; id: string; x: number; y: number }
   | { kind: "templates"; x: number; y: number }
   | { kind: "save-template"; id: string; x: number; y: number }
-  | { kind: "publish"; id: string; x: number; y: number }
-  | { kind: "copy"; id: string; dir: "in" | "out"; x: number; y: number }
+  | { kind: "attach"; x: number; y: number }
+  | { kind: "hosts"; x: number; y: number }
   | { kind: "destroy"; id: string; x: number; y: number }
   | { kind: "reset"; id: string; x: number; y: number };
 

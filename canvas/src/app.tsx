@@ -4,14 +4,31 @@ import { Frame } from "./frame";
 import { RootMenu } from "./menu";
 import { OverlayDialog } from "./dialogs";
 import { overlayZ, placeOverlay, type Overlay } from "./overlay";
-import { api, type Layout, type Sandbox, type WindowRec } from "./api";
+import {
+  api,
+  apiOn,
+  attachHost,
+  hostScope,
+  sessionToken,
+  type Layout,
+  type Sandbox,
+  type WindowRec,
+} from "./api";
+import {
+  applyDiscovery,
+  displayTitle,
+  loadRoster,
+  removeHost,
+  saveRoster,
+  upsertHost,
+  type HostRec,
+} from "./hosts";
 import { sandboxesWithoutWindows } from "./sandbox-icons";
 import { menuHit, type MenuHit } from "./menu-target";
 import {
   applyFetchedLayout,
   defaultLayout,
   defaultLog,
-  normalizeLayout,
   readCachedSnap,
   sameLayout,
   sameLines,
@@ -21,6 +38,29 @@ import {
   writeCachedLogLines,
   writeCachedSandboxes,
 } from "./layout-sync";
+
+const hostLayouts = new Map<string, Layout>();
+
+function persistRoster(hosts: HostRec[]): void {
+  const storage = globalThis.localStorage;
+  if (!storage) return;
+  saveRoster(storage, hosts);
+}
+
+function clientFor(hosts: HostRec[], hostId?: string) {
+  const h = hosts.find((x) => x.id === hostId) ?? hosts[0];
+  if (!h) return api;
+  return apiOn(hostScope(h.url, h.token));
+}
+
+function overlayId(ov: Overlay): string | undefined {
+  if ("id" in ov) return ov.id;
+  return undefined;
+}
+
+function hostById(hosts: HostRec[], id?: string): HostRec | undefined {
+  return hosts.find((h) => h.id === id) ?? hosts[0];
+}
 
 function focusTerm(id: string): void {
   const el = document.querySelector(`[data-win="${id}"] textarea.xterm-helper-textarea`);
@@ -33,6 +73,7 @@ export function App() {
   const cached = readCachedSnap();
   const [sandboxes, setSandboxes] = createSignal<Sandbox[]>(cached?.sandboxes ?? []);
   const [layout, setLayout] = createSignal<Layout>(cached?.layout ?? defaultLayout());
+  const [hosts, setHosts] = createSignal<HostRec[]>(loadRoster(globalThis.localStorage));
   const [focus, setFocus] = createSignal<string | null>(null);
   const [menu, setMenu] = createSignal<MenuHit | null>(null);
   const [overlay, setOverlay] = createSignal<Overlay | null>(null);
@@ -49,7 +90,12 @@ export function App() {
 
   const logRec = () => layout().log ?? defaultLog();
 
-  const refresh = async () => {
+  const setRoster = (next: HostRec[]) => {
+    setHosts(next);
+    persistRoster(next);
+  };
+
+  const loadOrigin = async () => {
     const [s, l] = await Promise.all([api.sandboxes(), api.layout()]);
     if (!sameSandboxes(sandboxes(), s.sandboxes)) {
       setSandboxes(s.sandboxes);
@@ -59,9 +105,90 @@ export function App() {
     const next = applyFetchedLayout(layout(), l, ids, interacting());
     if (!sameLayout(layout(), next)) commit(next);
     setReady(true);
-    if (!interacting() && !sameLayout(next, normalizeLayout(l, ids))) {
-      await api.saveLayout(next);
+  };
+
+  const refresh = async () => {
+    let roster = hosts();
+    const tok = sessionToken();
+    if (tok) {
+      try {
+        roster = upsertHost(roster, await attachHost(globalThis.location.origin, tok));
+        setRoster(roster);
+      } catch {
+        /* loopback token is enough to call this origin without a roster row */
+      }
     }
+    if (roster.length === 0) {
+      if (!tok) {
+        setReady(true);
+        setOverlay((cur) => cur ?? { kind: "attach", ...placeOverlay() });
+        return;
+      }
+      await loadOrigin();
+      return;
+    }
+    try {
+      const found = await clientFor(roster).discovery();
+      roster = applyDiscovery(roster, found.hosts);
+      setRoster(roster);
+    } catch {
+      /* Discovery is optional */
+    }
+    const many = roster.length > 1;
+    const parts = await Promise.all(
+      roster.map(async (h) => {
+        const c = apiOn(hostScope(h.url, h.token));
+        try {
+          const [s, l] = await Promise.all([c.sandboxes(), c.layout()]);
+          return { h, sandboxes: s.sandboxes, layout: l, ok: true as const };
+        } catch (e) {
+          const none: Sandbox[] = [];
+          return { h, sandboxes: none, layout: defaultLayout(), ok: false as const, err: e };
+        }
+      }),
+    );
+    const failed = parts.filter((p) => !p.ok);
+    if (failed.length > 0) {
+      setStatus(failed.map((p) => `${p.h.label}: unreachable`).join("; "));
+    }
+    const allSb: Sandbox[] = [];
+    const allWin: WindowRec[] = [];
+    const prevSb = sandboxes();
+    const prevWin = layout().windows;
+    for (const p of parts) {
+      if (!p.ok) {
+        for (const sb of prevSb) {
+          if (sb.host === p.h.id) allSb.push(sb);
+        }
+        for (const w of prevWin) {
+          if (w.host === p.h.id) allWin.push(w);
+        }
+        continue;
+      }
+      hostLayouts.set(p.h.id, p.layout);
+      for (const sb of p.sandboxes) allSb.push({ ...sb, host: p.h.id });
+      for (const w of p.layout.windows) {
+        allWin.push({
+          ...w,
+          host: p.h.id,
+          title: displayTitle(p.h, w.title, many),
+        });
+      }
+    }
+    if (!sameSandboxes(sandboxes(), allSb)) {
+      setSandboxes(allSb);
+      writeCachedSandboxes(allSb);
+    }
+    const ids = new Set(allSb.map((b) => b.id));
+    const chrome = parts.find((p) => p.ok)?.layout ?? defaultLayout();
+    const fetched: Layout = {
+      windows: allWin,
+      icon_manager: chrome.icon_manager,
+      log: chrome.log,
+    };
+    const next = applyFetchedLayout(layout(), fetched, ids, interacting());
+    if (!sameLayout(layout(), next)) commit(next);
+    setReady(true);
   };
 
   const live = (sandboxId: string) => sandboxLive(sandboxes(), sandboxId);
@@ -77,8 +204,35 @@ export function App() {
   const save = async (next: Layout) => {
     if (!ready()) return;
     commit(next);
+    const roster = hosts();
+    const chromeId = roster[0]?.id;
+    if (roster.length === 0) {
+      try {
+        await api.saveLayout(next);
+      } catch (e) {
+        setStatus(String(e));
+      }
+      return;
+    }
     try {
-      await api.saveLayout(next);
+      await Promise.all(
+        roster.map((h) => {
+          const prev = hostLayouts.get(h.id) ?? defaultLayout();
+          const windows = next.windows
+            .filter((w) => w.host === h.id || (!w.host && h.id === chromeId))
+            .map((w) => {
+              const { host: _host, ...rest } = w;
+              const raw = prev.windows.find((p) => p.id === rest.id);
+              return { ...rest, title: raw?.title ?? rest.title };
+            });
+          const layoutForHost: Layout = {
+            windows,
+            icon_manager: h.id === chromeId ? next.icon_manager : prev.icon_manager,
+            log: h.id === chromeId ? next.log : prev.log,
+          };
+          return apiOn(hostScope(h.url, h.token)).saveLayout(layoutForHost);
+        }),
+      );
     } catch (e) {
       setStatus(String(e));
     }
@@ -157,6 +311,7 @@ export function App() {
         <IconManager
           layout={layout()}
           sandboxes={sandboxes()}
+          hosts={hosts()}
           focus={focus()}
           live={live}
           busy={busy()}
@@ -184,6 +339,7 @@ export function App() {
         <CanvasWindows
           layout={layout()}
           sandboxes={sandboxes()}
+          hosts={hosts()}
           focus={focus()}
           live={live}
           busy={busy()}
@@ -211,6 +367,9 @@ export function App() {
             raise={raise}
             run={run}
             save={save}
+            hosts={hosts()}
+            onAttach={() => openOverlay({ kind: "attach", ...placeOverlay() })}
+            onHosts={() => openOverlay({ kind: "hosts", ...placeOverlay() })}
           />
         )}
       </Show>
@@ -218,8 +377,18 @@ export function App() {
         {(ov) => (
           <OverlayDialog
             overlay={ov()}
-            sandbox={sandboxes().find((s) => "id" in ov() && s.id === ov().id)}
+            sandbox={sandboxes().find((s) => overlayId(ov()) === s.id)}
             sandboxes={sandboxes()}
+            hosts={hosts()}
+            apiFor={(id) => clientFor(hosts(), id)}
+            onAttach={(h) => {
+              setRoster(upsertHost(hosts(), h));
+              void refresh();
+            }}
+            onDetach={(id) => {
+              setRoster(removeHost(hosts(), id));
+              void refresh();
+            }}
             move={(x, y) => setOverlay({ ...ov(), x, y })}
             pickSandbox={() => {
               setFocus(null);
@@ -245,6 +414,7 @@ export function App() {
           onResize={(w, h) => commit({ ...layout(), log: { ...logRec(), w, h } })}
           onMoveEnd={endGeom}
           onClose={() => void save({ ...layout(), log: { ...logRec(), visible: false } })}
+          hosts={hosts()}
           lines={logLines()}
           setLines={(lines) => {
             if (sameLines(logLines(), lines)) return;
@@ -268,15 +438,33 @@ function LogWindow(props: {
   onResize: (w: number, h: number) => void;
   onMoveEnd: () => void;
   onClose: () => void;
+  hosts: HostRec[];
   lines: string[];
   setLines: (lines: string[]) => void;
 }) {
   onSettled(() => {
     const tick = () => {
-      api
-        .progress()
-        .then((r) => {
-          if (!sameLines(props.lines, r.lines)) props.setLines(r.lines);
+      const roster = props.hosts;
+      if (roster.length === 0) {
+        api
+          .progress()
+          .then((r) => {
+            if (!sameLines(props.lines, r.lines)) props.setLines(r.lines);
+          })
+          .catch((e) => {
+            if (props.lines.length === 0) props.setLines([String(e)]);
+          });
+        return;
+      }
+      void Promise.all(
+        roster.map(async (h) => {
+          const r = await apiOn(hostScope(h.url, h.token)).progress();
+          return r.lines.map((line) => (roster.length > 1 ? `${h.label}: ${line}` : line));
+        }),
+      )
+        .then((chunks) => {
+          const lines = chunks.flat();
+          if (!sameLines(props.lines, lines)) props.setLines(lines);
         })
         .catch((e) => {
           if (props.lines.length === 0) props.setLines([String(e)]);
@@ -340,6 +528,7 @@ function StatusLine(props: { busy: boolean; status: string }) {
 function IconManager(props: {
   layout: Layout;
   sandboxes: Sandbox[];
+  hosts: HostRec[];
   focus: string | null;
   live: (id: string) => boolean;
   busy: boolean;
@@ -383,7 +572,14 @@ function IconManager(props: {
                   props.patchWin(w().id, { iconified: false }, true);
                   props.raise(w().id);
                   if (!props.live(w().sandbox) && !props.busy) {
-                    props.run(() => api.start(w().sandbox), "", true);
+                    props.run(
+                      () =>
+                        clientFor(props.hosts, w().host)
+                          .start(w().sandbox)
+                          .then(() => undefined),
+                      "",
+                      true,
+                    );
                   }
                 }}
                 onContextMenu={(e) => props.openMenu(e, { windowId: w().id })}
@@ -404,8 +600,9 @@ function IconManager(props: {
                   if (props.busy) return;
                   props.run(
                     async () => {
-                      if (s().state !== "running") await api.start(s().id);
-                      await api.openWindow(s().id);
+                      const c = clientFor(props.hosts, s().host);
+                      if (s().state !== "running") await c.start(s().id);
+                      await c.openWindow(s().id);
                     },
                     "",
                     true,
@@ -432,6 +629,7 @@ function windowStatus(sandboxes: Sandbox[], id: string): string {
 function CanvasWindows(props: {
   layout: Layout;
   sandboxes: Sandbox[];
+  hosts: HostRec[];
   focus: string | null;
   live: (id: string) => boolean;
   busy: boolean;
@@ -458,7 +656,14 @@ function CanvasWindows(props: {
             onMouseDown={() => {
               props.raise(w().id);
               if (!props.live(w().sandbox) && !props.busy) {
-                props.run(() => api.start(w().sandbox), "", true);
+                props.run(
+                  () =>
+                    clientFor(props.hosts, w().host)
+                      .start(w().sandbox)
+                      .then(() => undefined),
+                  "",
+                  true,
+                );
               }
             }}
             onContextMenu={(e) => props.openMenu(e, { windowId: w().id })}
@@ -479,6 +684,7 @@ function CanvasWindows(props: {
             >
               <Term
                 windowId={w().id}
+                host={hostById(props.hosts, w().host)}
                 active={props.focus === w().id}
                 onActivate={() => props.raise(w().id)}
               />
@@ -503,10 +709,14 @@ function AppMenu(props: {
   raise: (id: string) => void;
   run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
   save: (next: Layout) => void;
+  onAttach: () => void;
+  onHosts: () => void;
+  hosts: HostRec[];
 }) {
   const at = placeOverlay();
   const sb = () => props.sandbox;
   const winId = () => props.window?.id;
+  const client = () => clientFor(props.hosts, sb()?.host);
   return (
     <RootMenu
       x={props.hit.x}
@@ -527,7 +737,7 @@ function AppMenu(props: {
           return;
         }
         props.run(async () => {
-          await api.openWindow(box.id);
+          await client().openWindow(box.id);
         });
       }}
       onIconify={() => {
@@ -544,15 +754,28 @@ function AppMenu(props: {
       }}
       onCloseWindow={() => {
         const id = winId();
-        if (id) props.run(() => api.closeWindow(id));
+        if (id) props.run(() => client().closeWindow(id));
       }}
       onStart={() => {
         const box = sb();
-        if (box) props.run(() => api.start(box.id).then(() => undefined), "", true);
+        if (box)
+          props.run(
+            () =>
+              client()
+                .start(box.id)
+                .then(() => undefined),
+            "",
+            true,
+          );
       }}
       onStop={() => {
         const box = sb();
-        if (box) props.run(() => api.stop(box.id).then(() => undefined));
+        if (box)
+          props.run(() =>
+            client()
+              .stop(box.id)
+              .then(() => undefined),
+          );
       }}
       onDestroy={() => {
         const box = sb();
@@ -582,14 +805,8 @@ function AppMenu(props: {
       onTemplates={() => {
         props.setOverlay({ kind: "templates", ...at });
       }}
-      onPublish={() => {
-        const box = sb();
-        if (box) props.setOverlay({ kind: "publish", id: box.id, ...at });
-      }}
-      onCopy={(dir) => {
-        const box = sb();
-        if (box) props.setOverlay({ kind: "copy", id: box.id, dir, ...at });
-      }}
+      onAttach={() => props.onAttach()}
+      onHosts={() => props.onHosts()}
       close={() => props.setMenu(null)}
     />
   );

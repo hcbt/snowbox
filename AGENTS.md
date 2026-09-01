@@ -4,8 +4,8 @@ Snowbox runs a coding Agent inside an isolated Nix-built Linux Sandbox on the Ho
 
 ## Language and decisions
 
-- **[CONTEXT.md](CONTEXT.md)** — glossary. Use those nouns (Host, Sandbox, Workspace, Home, Daemon, Cache, Package, Template, Environment, Canvas, Window, Layout). Read it before naming anything in code or docs.
-- **[docs/adr/](docs/adr/)** — irreversible trade-offs. Read the matching ADR before changing isolation, the Cache, the Environment, the Daemon API, the Host OS/hypervisor, the Daemon language (Rust, [0019](docs/adr/0019-daemon-is-rust.md)), the macOS VMM ([0022](docs/adr/0022-daemon-embeds-virtualization-framework.md), [0023](docs/adr/0023-start-restores-machine-state.md)), or the GUI ([0020](docs/adr/0020-gui-is-a-canvas-of-windows.md), [0021](docs/adr/0021-ui-is-a-solid-spa.md)).
+- **[CONTEXT.md](CONTEXT.md)** — glossary. Use those nouns (Host, Sandbox, Workspace, Home, Daemon, Cache, Package, Template, Environment, Canvas, Window, Layout, Attach, Detach, Discovery). Read it before naming anything in code or docs.
+- **[docs/adr/](docs/adr/)** — irreversible trade-offs. Read the matching ADR before changing isolation, the Cache, the Environment, the Daemon API ([0015](docs/adr/0015-documented-localhost-api.md), [0028](docs/adr/0028-canvas-attaches-to-hosts.md)), the Host OS/hypervisor, the Daemon language (Rust, [0019](docs/adr/0019-daemon-is-rust.md)), the macOS VMM ([0022](docs/adr/0022-daemon-embeds-virtualization-framework.md), [0023](docs/adr/0023-start-restores-machine-state.md)), or the GUI ([0020](docs/adr/0020-gui-is-a-canvas-of-windows.md), [0021](docs/adr/0021-ui-is-a-solid-spa.md)).
 
 ## How to work here
 
@@ -21,7 +21,7 @@ Snowbox runs a coding Agent inside an isolated Nix-built Linux Sandbox on the Ho
 
 - Workspace lives on the Sandbox disk at `/workspace`, not a Host mount.
 - Environment is a Host document. The Daemon is the only Cache writer. Guests copy from the Cache; they do not share `/nix/store`.
-- Daemon API is `127.0.0.1` plus a token. Loopback is not auth. Contract: [docs/api.md](docs/api.md).
+- Daemon API is token-authenticated. Loopback is not auth. Callers may be this Host or a Canvas the person Attached. Contract: [docs/api.md](docs/api.md).
 - SSH and editor-remote are Unix side effects, not product features.
 - Do not put personal tracker identifiers (issue IDs, private board URLs, git branch names generated from those IDs) in this public repo.
 - Canvas lint is oxlint (`.oxlintrc.json` at the repo root). Format with oxfmt from devenv. `@oxlint/plugins` is the only Canvas bun lint dependency.

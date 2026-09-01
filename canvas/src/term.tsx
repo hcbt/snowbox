@@ -2,7 +2,7 @@ import { Show, createEffect, createSignal, onSettled } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { json } from "./api";
+import type { HostRec } from "./hosts";
 import { readTermPoster, writeTermPoster } from "./layout-sync";
 
 type PtyFrame = string | ArrayBuffer | ArrayBufferView;
@@ -20,7 +20,12 @@ function wsBytes(data: PtyFrame): string | Uint8Array {
   return "";
 }
 
-export function Term(props: { windowId: string; active?: boolean; onActivate?: () => void }) {
+export function Term(props: {
+  windowId: string;
+  host?: HostRec;
+  active?: boolean;
+  onActivate?: () => void;
+}) {
   let host: HTMLDivElement | undefined;
   let term: Terminal | undefined;
   const setHost = (el: HTMLDivElement) => {
@@ -82,46 +87,43 @@ export function Term(props: { windowId: string; active?: boolean; onActivate?: (
     const ro = new ResizeObserver(() => fit.fit());
     ro.observe(el);
 
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    // Mint the session cookie (browsers cannot set Authorization on
-    // WebSocket) then upgrade with Origin + cookie.
-    void json("/api/v1/health")
-      .then(() => {
-        if (dropped) return;
-        const sock = new WebSocket(
-          `${proto}://${location.host}/api/v1/windows/${props.windowId}/pty`,
-        );
-        ws = sock;
-        sock.binaryType = "arraybuffer";
-        let got = false;
-        sock.onopen = () => {
-          fit.fit();
-          sendSize();
-          if (props.active !== false) t.focus();
-          window.setTimeout(() => {
-            if (!dropped && !got) uncover();
-          }, 100);
-        };
-        sock.onmessage = (ev) => {
-          got = true;
-          // SAFETY: binaryType is arraybuffer; browsers send string or ArrayBuffer.
-          const data = wsBytes(ev.data as PtyFrame);
-          if (covering) {
-            t.write(data, () => {
-              uncover();
-              snap();
-            });
-            return;
-          }
-          t.write(data);
-        };
-        sock.onclose = () => {
-          if (!dropped) t.write("\r\n[window closed]\r\n");
-        };
-      })
-      .catch((e) => {
-        if (!dropped) t.write(`\r\n[window: ${e}]\r\n`);
-      });
+    const base = props.host?.url ?? `${location.protocol}//${location.host}`;
+    const token = props.host?.token;
+    const wsUrl = new URL(`${base}/api/v1/windows/${props.windowId}/pty`);
+    wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+    if (token) wsUrl.searchParams.set("token", token);
+    if (dropped) return;
+    const sock = new WebSocket(wsUrl.toString());
+    ws = sock;
+    sock.binaryType = "arraybuffer";
+    let got = false;
+    sock.onopen = () => {
+      fit.fit();
+      sendSize();
+      if (props.active !== false) t.focus();
+      window.setTimeout(() => {
+        if (!dropped && !got) uncover();
+      }, 100);
+    };
+    sock.onmessage = (ev) => {
+      got = true;
+      // SAFETY: binaryType is arraybuffer; browsers send string or ArrayBuffer.
+      const data = wsBytes(ev.data as PtyFrame);
+      if (covering) {
+        t.write(data, () => {
+          uncover();
+          snap();
+        });
+        return;
+      }
+      t.write(data);
+    };
+    sock.onclose = () => {
+      if (!dropped) t.write("\r\n[window closed]\r\n");
+    };
+    sock.onerror = () => {
+      if (!dropped) t.write("\r\n[window: socket error]\r\n");
+    };
 
     requestAnimationFrame(() => {
       fit.fit();

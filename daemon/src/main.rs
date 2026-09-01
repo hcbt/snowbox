@@ -13,8 +13,10 @@ mod agent;
 mod api;
 mod auth;
 mod cache;
+mod discovery;
 mod disk;
 mod environment;
+mod host;
 mod kvm;
 mod layout;
 #[cfg(test)]
@@ -22,7 +24,6 @@ mod nar;
 mod nix;
 mod progress;
 mod pty;
-mod publish;
 mod ready;
 mod resume;
 mod runtime;
@@ -54,7 +55,7 @@ const FALLBACK_CANVAS: &str = r#"<!doctype html>
 "#;
 
 fn bind_addr() -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], api::LISTEN_PORT))
+    SocketAddr::from(([0, 0, 0, 0], api::LISTEN_PORT))
 }
 
 fn main() -> Result<()> {
@@ -109,8 +110,12 @@ async fn run_daemon() -> Result<()> {
     };
     let resume = resume::Resume::open(data.join("running.json"));
     resume.prune(store.list().into_iter().map(|s| s.id));
+    let host_id = host::load_or_create(&data.join("host.json"))?;
+    eprintln!("host {host_id}");
+    let discovery = discovery::Discovery::start(host_id);
     let state = api::AppState {
         token,
+        host_id,
         store: Arc::new(store),
         cache: Arc::new(cache),
         layout: Arc::new(layout),
@@ -118,24 +123,27 @@ async fn run_daemon() -> Result<()> {
             shipped: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../environment"),
             user: data.join("templates"),
         }),
-        publish: publish::Publisher::default(),
         sessions: pty::Sessions::default(),
         progress: progress::Progress::new(),
         vmm,
         resume: Arc::new(resume),
         agent_options,
+        discovery,
     };
-    let app = with_ui(api::router(state.clone()), state.clone()).layer(
-        middleware::from_fn_with_state(state.clone(), auth::attach_session),
-    );
+    let app = with_ui(api::router(state.clone()), state.clone())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::attach_session,
+        ))
+        .layer(middleware::from_fn(auth::cors));
 
     let bind = bind_addr();
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("bind {bind}"))?;
 
-    let url = format!("http://{bind}/");
-    eprintln!("snowbox {url}");
+    let local = format!("http://127.0.0.1:{}/", api::LISTEN_PORT);
+    eprintln!("snowbox {local}");
     eprintln!("token {}", token_path.display());
     eprintln!(
         "virtualization {}",
@@ -145,7 +153,7 @@ async fn run_daemon() -> Result<()> {
             "unsupported"
         }
     );
-    open_browser(&url);
+    open_browser(&local);
     api::resume_and_warm(state.clone());
 
     axum::serve(listener, app)
@@ -157,9 +165,10 @@ async fn run_daemon() -> Result<()> {
 
 fn with_ui(router: axum::Router, state: api::AppState) -> axum::Router {
     let token = state.token.clone();
-    router.fallback(move |uri: Uri| {
+    router.fallback(move |request: axum::http::Request<Body>| {
         let token = token.clone();
         async move {
+            let uri = request.uri().clone();
             if uri.path().starts_with("/api/") {
                 return (
                     StatusCode::NOT_FOUND,
@@ -167,7 +176,8 @@ fn with_ui(router: axum::Router, state: api::AppState) -> axum::Router {
                 )
                     .into_response();
             }
-            serve_canvas(uri, &token).await
+            let inject = auth::loopback_host(auth::request_host(&request));
+            serve_canvas(uri, if inject { Some(token.as_str()) } else { None }).await
         }
     })
 }
@@ -190,7 +200,7 @@ fn ui_dir() -> Option<PathBuf> {
     None
 }
 
-async fn serve_canvas(uri: Uri, token: &str) -> Response {
+async fn serve_canvas(uri: Uri, token: Option<&str>) -> Response {
     if let Some(dir) = ui_dir() {
         if let Some(path) = safe_ui_file(&dir, uri.path()) {
             if path.is_file() {
@@ -205,7 +215,11 @@ async fn serve_canvas(uri: Uri, token: &str) -> Response {
             return html_with_token(&index, token);
         }
     }
-    Html(auth::embed_token_in_canvas(FALLBACK_CANVAS, token)).into_response()
+    let body = match token {
+        Some(t) => auth::embed_token_in_canvas(FALLBACK_CANVAS, t),
+        None => FALLBACK_CANVAS.to_string(),
+    };
+    Html(body).into_response()
 }
 
 fn safe_ui_file(dir: &std::path::Path, url_path: &str) -> Option<PathBuf> {
@@ -224,10 +238,13 @@ fn safe_ui_file(dir: &std::path::Path, url_path: &str) -> Option<PathBuf> {
     Some(out)
 }
 
-fn html_with_token(path: &std::path::Path, token: &str) -> Response {
+fn html_with_token(path: &std::path::Path, token: Option<&str>) -> Response {
     match std::fs::read_to_string(path) {
         Ok(html) => {
-            let body = auth::embed_token_in_canvas(&html, token);
+            let body = match token {
+                Some(t) => auth::embed_token_in_canvas(&html, t),
+                None => html,
+            };
             ([(CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response()
         }
         Err(_) => StatusCode::NOT_FOUND.into_response(),

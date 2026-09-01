@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use crate::auth::{require_token, require_ws_origin};
 use crate::cache::Cache;
+use crate::discovery::Discovery;
 use crate::layout::{Layout, LayoutStore};
-use crate::publish::Publisher;
 use crate::resume::Resume;
 use crate::sandbox::{ActionError, Limits, State as SandboxState, Store};
 use crate::templates::Library;
@@ -29,16 +29,17 @@ pub fn listen_port() -> u16 {
 #[derive(Clone)]
 pub struct AppState {
     pub token: String,
+    pub host_id: Uuid,
     pub store: Arc<Store>,
     pub cache: Arc<Cache>,
     pub layout: Arc<LayoutStore>,
     pub templates: Arc<Library>,
-    pub publish: Publisher,
     pub sessions: crate::pty::Sessions,
     pub progress: crate::progress::Progress,
     pub vmm: Option<Arc<Hypervisor>>,
     pub resume: Arc<Resume>,
     pub agent_options: Arc<Result<serde_json::Value, String>>,
+    pub discovery: Discovery,
 }
 
 #[derive(Deserialize, Default)]
@@ -73,41 +74,19 @@ impl LimitsPatch {
     }
 }
 
-#[derive(Deserialize)]
-pub struct CopyInBody {
-    pub from: PathBuf,
-    #[serde(default)]
-    pub replace: bool,
-}
-
-#[derive(Deserialize)]
-pub struct CopyOutBody {
-    pub to: PathBuf,
-    #[serde(default)]
-    pub replace: bool,
-}
-
 pub fn router(state: AppState) -> Router {
     let v1 = Router::new()
         .route("/health", get(health))
+        .route("/host", get(host))
+        .route("/discovery", get(list_discovery))
         .route("/sandboxes", get(list).post(create))
         .route("/sandboxes/{id}", get(get_one).patch(patch).delete(destroy))
         .route("/sandboxes/{id}/start", post(start))
         .route("/sandboxes/{id}/stop", post(stop))
         .route("/sandboxes/{id}/reset", post(reset))
-        .route("/sandboxes/{id}/copy-in", post(copy_in))
-        .route("/sandboxes/{id}/copy-out", post(copy_out))
         .route("/agent-options", get(agent_options))
         .route("/templates", get(list_templates).post(save_template))
         .route("/templates/{name}", get(get_template).put(put_template))
-        .route(
-            "/sandboxes/{id}/publish",
-            get(list_publish).post(publish_port),
-        )
-        .route(
-            "/sandboxes/{id}/publish/{port}",
-            axum::routing::delete(unpublish_port),
-        )
         .route(
             "/sandboxes/{id}/environment",
             get(get_environment).put(put_environment),
@@ -127,6 +106,14 @@ pub fn router(state: AppState) -> Router {
 
 async fn progress(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "lines": state.progress.snapshot() }))
+}
+
+async fn host(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "id": state.host_id }))
+}
+
+async fn list_discovery(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "hosts": state.discovery.list() }))
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -211,7 +198,6 @@ async fn stop(
         .map_err(|_| ActionError::Internal)
         .and_then(|r| r);
     if result.is_ok() {
-        state.publish.drop_sandbox(id);
         state.sessions.drop_sandbox(id);
     }
     action(result)
@@ -234,7 +220,6 @@ async fn reset(
         .map_err(|_| ActionError::Internal)
         .and_then(|r| r);
         if result.is_ok() {
-            state.publish.drop_sandbox(id);
             state.sessions.drop_sandbox(id);
         }
         return action(result);
@@ -246,7 +231,6 @@ async fn destroy(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
-    state.publish.drop_sandbox(id);
     state.sessions.drop_sandbox(id);
     if let Some(vmm) = state.vmm.clone() {
         let store = state.store.clone();
@@ -270,74 +254,10 @@ async fn destroy(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn copy_in(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(body): Json<CopyInBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    action(state.store.copy_in(id, &body.from, body.replace))
-}
-
-async fn copy_out(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(body): Json<CopyOutBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    action(state.store.copy_out(id, &body.to, body.replace))
-}
-
 #[derive(Deserialize)]
 pub struct SaveTemplateBody {
     pub name: String,
     pub sandbox: Uuid,
-}
-
-#[derive(Deserialize)]
-pub struct PublishBody {
-    pub port: u16,
-    pub host_port: Option<u16>,
-}
-
-async fn list_publish(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let _ = state.store.get(id).map_err(map_err)?;
-    Ok(Json(serde_json::json!({
-        "published": state.publish.list(id)
-    })))
-}
-
-async fn publish_port(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(body): Json<PublishBody>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let sandbox = state.store.get(id).map_err(map_err)?;
-    if sandbox.state != SandboxState::Running {
-        return Err(map_err(ActionError::Conflict("sandbox is not running")));
-    }
-    let Some(vmm) = state.vmm.clone() else {
-        return Err(map_err(ActionError::Failed("no hypervisor".into())));
-    };
-    let mapping = state
-        .publish
-        .publish(vmm, id, body.port, body.host_port)
-        .await
-        .map_err(map_err)?;
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::to_value(mapping).expect("mapping json")),
-    ))
-}
-
-async fn unpublish_port(
-    State(state): State<AppState>,
-    Path((id, port)): Path<(Uuid, u16)>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
-    let _ = state.store.get(id).map_err(map_err)?;
-    state.publish.unpublish(id, port).map_err(map_err)?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_templates(
@@ -710,13 +630,15 @@ mod tests {
 
     fn harness() -> (tempfile::TempDir, AppState) {
         let dir = tempfile::tempdir().unwrap();
+        let host_id = Uuid::from_u128(7);
         let state = AppState {
             token: "test-token".into(),
+            host_id,
             store: Arc::new(Store::open(dir.path()).unwrap()),
             cache: Arc::new(Cache::open(dir.path().join("cache")).unwrap()),
             layout: Arc::new(LayoutStore::open(dir.path().join("layout.json")).unwrap()),
-            publish: crate::publish::Publisher::default(),
             sessions: crate::pty::Sessions::default(),
+            discovery: crate::discovery::Discovery::empty(host_id),
             templates: Arc::new(crate::templates::Library {
                 shipped: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../environment"),
                 user: dir.path().join("templates"),
@@ -1084,7 +1006,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn publish_refused_while_stopped() {
+    async fn host_id_is_stable() {
+        let (_dir, state) = harness();
+        let id = state.host_id;
+        let (status, json) = send(
+            router(state),
+            authed(Request::get("http://127.0.0.1/api/v1/host"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["id"], id.to_string());
+    }
+
+    #[tokio::test]
+    async fn discovery_lists_seeded_peers() {
+        let (_dir, state) = harness();
+        let peer = Uuid::from_u128(9);
+        state.discovery.seed(crate::discovery::FoundHost {
+            id: peer,
+            addresses: vec!["10.0.0.2".into()],
+            port: 5418,
+        });
+        let (status, json) = send(
+            router(state),
+            authed(Request::get("http://127.0.0.1/api/v1/discovery"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let hosts = json["hosts"].as_array().unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0]["id"], peer.to_string());
+    }
+
+    #[tokio::test]
+    async fn copy_and_publish_routes_are_gone() {
         let (_dir, state) = harness();
         let make = || router(state.clone());
         let (status, created) = send(
@@ -1097,18 +1056,21 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CREATED);
         let id = created["id"].as_str().unwrap();
-        let (status, err) = send(
-            make(),
-            authed(Request::post(format!(
-                "http://127.0.0.1/api/v1/sandboxes/{id}/publish"
-            )))
-            .header("content-type", "application/json")
-            .body(Body::from(r#"{"port":3000}"#))
-            .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(err["error"], "conflict");
+        for path in [
+            format!("/api/v1/sandboxes/{id}/copy-in"),
+            format!("/api/v1/sandboxes/{id}/copy-out"),
+            format!("/api/v1/sandboxes/{id}/publish"),
+        ] {
+            let (status, _json) = send(
+                make(),
+                authed(Request::post(format!("http://127.0.0.1{path}")))
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
     }
 
     #[tokio::test]
@@ -1234,52 +1196,6 @@ mod tests {
         assert_eq!(listed["sandboxes"].as_array().unwrap().len(), 2);
     }
 
-    #[tokio::test]
-    async fn copy_in_out_replace() {
-        let (dir, state) = harness();
-        let make = || router(state.clone());
-        let (status, created) = send(
-            make(),
-            authed(Request::post("http://127.0.0.1/api/v1/sandboxes"))
-                .header("content-type", "application/json")
-                .body(Body::from("{}"))
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED);
-        let id = created["id"].as_str().unwrap();
-        assert!(created["home"].as_array().unwrap().is_empty());
-
-        let src = dir.path().join("proj");
-        std::fs::create_dir(&src).unwrap();
-        std::fs::write(src.join("a"), "1").unwrap();
-        let copy_in = format!("http://127.0.0.1/api/v1/sandboxes/{id}/copy-in");
-        let body = serde_json::json!({ "from": src, "replace": false });
-        let (status, _) = send(
-            make(),
-            authed(Request::post(&copy_in))
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-
-        let dest = dir.path().join("out");
-        let copy_out = format!("http://127.0.0.1/api/v1/sandboxes/{id}/copy-out");
-        let body = serde_json::json!({ "to": dest, "replace": false });
-        let (status, _) = send(
-            make(),
-            authed(Request::post(&copy_out))
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(std::fs::read_to_string(dest.join("a")).unwrap(), "1");
-    }
-
     fn with_session(state: AppState) -> Router {
         router(state.clone()).layer(middleware::from_fn_with_state(
             state,
@@ -1386,7 +1302,7 @@ mod tests {
             )))
             .header("Upgrade", "websocket")
             .header("Connection", "upgrade")
-            .header("Origin", "http://evil.example:5418")
+            .header("Origin", "http://evil.example:80")
             .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
             .header("Sec-WebSocket-Version", "13")
             .body(Body::empty())
@@ -1395,6 +1311,75 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert_eq!(json["error"], "forbidden");
+    }
+
+    #[tokio::test]
+    async fn websocket_peer_canvas_origin_is_not_forbidden() {
+        let (_dir, state) = harness();
+        let id = Uuid::nil();
+        let (status, json) = send(
+            router(state),
+            authed(Request::get(format!(
+                "http://127.0.0.1/api/v1/windows/{id}/pty"
+            )))
+            .header("Upgrade", "websocket")
+            .header("Connection", "upgrade")
+            .header("Origin", format!("http://10.0.0.2:{LISTEN_PORT}"))
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "13")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await;
+        assert_ne!(status, StatusCode::FORBIDDEN);
+        assert_ne!(json["error"], "forbidden");
+    }
+
+    #[tokio::test]
+    async fn websocket_query_token_is_accepted() {
+        let (_dir, state) = harness();
+        let id = Uuid::nil();
+        let (status, json) = send(
+            router(state),
+            Request::get(format!(
+                "http://127.0.0.1/api/v1/windows/{id}/pty?token=test-token"
+            ))
+            .header("Upgrade", "websocket")
+            .header("Connection", "upgrade")
+            .header("Origin", format!("http://127.0.0.1:{LISTEN_PORT}"))
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Sec-WebSocket-Version", "13")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await;
+        assert_ne!(status, StatusCode::UNAUTHORIZED);
+        assert_ne!(json["error"], "unauthorized");
+    }
+
+    #[tokio::test]
+    async fn cors_reflects_canvas_origin() {
+        let (_dir, state) = harness();
+        let app = router(state).layer(middleware::from_fn(crate::auth::cors));
+        let response = app
+            .oneshot(
+                authed(Request::get("http://127.0.0.1/api/v1/health"))
+                    .header("Origin", "http://10.0.0.2:5418")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "http://10.0.0.2:5418"
+        );
     }
 
     #[tokio::test]

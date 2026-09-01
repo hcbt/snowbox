@@ -2,6 +2,8 @@ import { For, Show, createSignal, onSettled } from "solid-js";
 import { Frame } from "./frame";
 import {
   api,
+  apiOn,
+  attachHost,
   isJsonObject,
   type AgentOption,
   type AgentProgram,
@@ -9,11 +11,11 @@ import {
   type EnvironmentDoc,
   type Json,
   type JsonObject,
-  type Published,
   type Sandbox,
   type Template,
 } from "./api";
 import { overlayZ, type Overlay } from "./overlay";
+import type { HostRec } from "./hosts";
 
 const field =
   "mt-0.5 w-full box-border border border-neutral-600 px-1 py-0.5 font-mono text-[13px]";
@@ -100,14 +102,14 @@ function overlayTitle(ov: Overlay, sandboxName: string): string {
       return "Templates";
     case "save-template":
       return `Save ${sandboxName} as Template`;
-    case "publish":
-      return `Publish — ${sandboxName}`;
+    case "attach":
+      return "Attach Host";
+    case "hosts":
+      return "Hosts";
     case "destroy":
       return `Destroy ${sandboxName}`;
     case "reset":
       return `Reset ${sandboxName}`;
-    case "copy":
-      return ov.dir === "in" ? `Copy in — ${sandboxName}` : `Copy out — ${sandboxName}`;
   }
 }
 
@@ -153,6 +155,10 @@ export function OverlayDialog(props: {
   overlay: Overlay;
   sandbox?: Sandbox;
   sandboxes: Sandbox[];
+  hosts?: HostRec[];
+  apiFor?: (hostId?: string) => ReturnType<typeof apiOn>;
+  onAttach?: (host: HostRec) => void;
+  onDetach?: (id: string) => void;
   move: (x: number, y: number) => void;
   pickSandbox: (id: string) => void;
   close: () => void;
@@ -173,11 +179,9 @@ export function OverlayDialog(props: {
   const [agents, setAgents] = createSignal<AgentProgram[]>([]);
   const [envDoc, setEnvDoc] = createSignal<EnvironmentDoc>({});
   const [envCfg, setEnvCfg] = createSignal<{ [name: string]: EnvProgram }>({});
-  const [path, setPath] = createSignal("");
-  const [pubPort, setPubPort] = createSignal("3000");
-  const [hostPort, setHostPort] = createSignal("");
-  const [published, setPublished] = createSignal<Published[]>([]);
-  const [replace, setReplace] = createSignal(false);
+  const [attachUrl, setAttachUrl] = createSignal("");
+  const [attachToken, setAttachToken] = createSignal("");
+  const [hostPick, setHostPick] = createSignal(props.hosts?.[0]?.id ?? "");
   const [customize, setCustomize] = createSignal(false);
   const [envVars, setEnvVars] = createSignal("");
   const [tplName, setTplName] = createSignal("");
@@ -187,9 +191,8 @@ export function OverlayDialog(props: {
   const [boxH, setBoxH] = createSignal(start[1]);
 
   onSettled(() => {
-    loadOverlay(props.overlay, props.sandbox, {
+    loadOverlay(props.overlay, props.sandbox, clientOf(props, hostPick() || props.sandbox?.host), {
       setTemplates,
-      setPublished,
       setAgents,
       setEnvDoc,
       setEnvCfg,
@@ -207,16 +210,14 @@ export function OverlayDialog(props: {
       cpu: cpu(),
       ram: ram(),
       disk: disk(),
-      path: path(),
-      pubPort: pubPort(),
-      hostPort: hostPort(),
-      replace: replace(),
+      attachUrl: attachUrl(),
+      attachToken: attachToken(),
+      hostPick: hostPick(),
       envDoc: envDoc(),
       envCfg: envCfg(),
       envVars: envVars(),
       customize: customize(),
       tplName: tplName(),
-      setPublished,
     });
 
   return (
@@ -258,15 +259,14 @@ export function OverlayDialog(props: {
             setRam={setRam}
             disk={disk()}
             setDisk={setDisk}
-            path={path()}
-            setPath={setPath}
-            pubPort={pubPort()}
-            setPubPort={setPubPort}
-            hostPort={hostPort()}
-            setHostPort={setHostPort}
-            published={published()}
-            replace={replace()}
-            setReplace={setReplace}
+            attachUrl={attachUrl()}
+            setAttachUrl={setAttachUrl}
+            attachToken={attachToken()}
+            setAttachToken={setAttachToken}
+            hosts={props.hosts ?? []}
+            hostPick={hostPick()}
+            setHostPick={setHostPick}
+            onDetach={props.onDetach}
             agents={agents()}
             envCfg={envCfg()}
             setEnvCfg={setEnvCfg}
@@ -310,12 +310,20 @@ function submitLabel(kind: Overlay["kind"], sandboxName: string): string {
   return "OK";
 }
 
+function clientOf(
+  props: { apiFor?: (hostId?: string) => ReturnType<typeof apiOn>; sandbox?: Sandbox },
+  hostId?: string,
+) {
+  if (props.apiFor) return props.apiFor(hostId ?? props.sandbox?.host);
+  return api;
+}
+
 function loadOverlay(
   overlay: Overlay,
   sandbox: Sandbox | undefined,
+  client: ReturnType<typeof apiOn>,
   set: {
     setTemplates: (t: Template[]) => void;
-    setPublished: (p: Published[]) => void;
     setAgents: (a: AgentProgram[]) => void;
     setEnvDoc: (d: EnvironmentDoc) => void;
     setEnvCfg: (c: { [name: string]: EnvProgram }) => void;
@@ -328,15 +336,9 @@ function loadOverlay(
     overlay.kind === "save-template" ||
     overlay.kind === "templates"
   ) {
-    api
+    client
       .templates()
       .then((r) => set.setTemplates(r.templates))
-      .catch(() => {});
-  }
-  if (overlay.kind === "publish" && sandbox) {
-    api
-      .published(sandbox.id)
-      .then((r) => set.setPublished(r.published))
       .catch(() => {});
   }
   if (
@@ -344,7 +346,7 @@ function loadOverlay(
     overlay.kind === "templates" ||
     overlay.kind === "environment"
   ) {
-    api
+    client
       .agentOptions()
       .then((opts) => {
         set.setOptErr("");
@@ -356,7 +358,7 @@ function loadOverlay(
       });
   }
   if (overlay.kind === "environment" && sandbox) {
-    api
+    client
       .environment(sandbox.id)
       .then((cfg) => {
         set.setEnvDoc(cfg);
@@ -371,6 +373,8 @@ async function submitOverlay(
   props: {
     overlay: Overlay;
     sandbox?: Sandbox;
+    apiFor?: (hostId?: string) => ReturnType<typeof apiOn>;
+    onAttach?: (host: HostRec) => void;
     close: () => void;
     refresh?: () => void;
     run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
@@ -381,37 +385,38 @@ async function submitOverlay(
     cpu: string;
     ram: string;
     disk: string;
-    path: string;
-    pubPort: string;
-    hostPort: string;
-    replace: boolean;
+    attachUrl: string;
+    attachToken: string;
+    hostPick: string;
     envDoc: EnvironmentDoc;
     envCfg: { [name: string]: EnvProgram };
     envVars: string;
     customize: boolean;
     tplName: string;
-    setPublished: (p: Published[]) => void;
   },
 ): Promise<void> {
   const ov = props.overlay;
-  if (ov.kind === "sandboxes") {
+  const client = clientOf(props, ov.kind === "sandbox" ? form.hostPick : props.sandbox?.host);
+  if (ov.kind === "sandboxes" || ov.kind === "hosts") {
     props.close();
     return;
   }
   if (ov.kind === "save-template" && !form.name.trim()) return;
 
   let ok = false;
-  if (ov.kind === "sandbox") {
+  if (ov.kind === "attach") {
+    ok = await submitAttach(props, form);
+  } else if (ov.kind === "sandbox") {
     props.close();
     await props.run(
       async () => {
         const env = form.customize
           ? environmentBody(form.envDoc, form.envCfg, form.envVars)
           : undefined;
-        const sb = await api.create(form.name || undefined, form.tpl || undefined, env);
-        await api.openWindow(sb.id);
+        const sb = await client.create(form.name || undefined, form.tpl || undefined, env);
+        await client.openWindow(sb.id);
         props.refresh?.();
-        await api.start(sb.id);
+        await client.start(sb.id);
       },
       "",
       true,
@@ -420,7 +425,7 @@ async function submitOverlay(
   } else if (ov.kind === "templates") {
     if (!form.tplName.trim()) return;
     ok = await props.run(() =>
-      api
+      client
         .saveTemplateConfig(
           form.tplName.trim(),
           environmentBody(form.envDoc, form.envCfg, form.envVars),
@@ -428,21 +433,10 @@ async function submitOverlay(
         .then(() => undefined),
     );
   } else if (ov.kind === "save-template") {
-    ok = await props.run(() => api.saveTemplate(form.name.trim(), ov.id).then(() => undefined));
-  } else if (ov.kind === "publish") {
-    const host = form.hostPort.trim();
-    await props.run(async () => {
-      const pub = await api.publish(ov.id, Number(form.pubPort), host ? Number(host) : undefined);
-      const list = await api.published(ov.id);
-      const rows = list.published.some((p) => p.url === pub.url)
-        ? list.published
-        : [...list.published, pub];
-      form.setPublished(rows);
-    });
-    return;
+    ok = await props.run(() => client.saveTemplate(form.name.trim(), ov.id).then(() => undefined));
   } else if (ov.kind === "limits") {
     ok = await props.run(() =>
-      api
+      client
         .patchLimits(ov.id, {
           cpu: Number(form.cpu),
           ram: Number(form.ram) * 1024 * 1024,
@@ -454,24 +448,32 @@ async function submitOverlay(
     const running = props.sandbox?.state === "running";
     ok = await props.run(
       () =>
-        api
+        client
           .saveEnvironment(ov.id, environmentBody(form.envDoc, form.envCfg, form.envVars))
           .then(() => undefined),
       running ? "" : "applies on Start",
       running,
     );
-  } else if (ov.kind === "copy") {
-    ok = await props.run(() =>
-      ov.dir === "in"
-        ? api.copyIn(ov.id, form.path, form.replace).then(() => undefined)
-        : api.copyOut(ov.id, form.path, form.replace).then(() => undefined),
-    );
   } else if (ov.kind === "destroy") {
-    ok = await props.run(() => api.destroy(ov.id));
+    ok = await props.run(() => client.destroy(ov.id));
   } else if (ov.kind === "reset") {
-    ok = await props.run(() => api.reset(ov.id).then(() => undefined), "", true);
+    ok = await props.run(() => client.reset(ov.id).then(() => undefined), "", true);
   }
   if (ok) props.close();
+}
+
+async function submitAttach(
+  props: {
+    onAttach?: (host: HostRec) => void;
+    run: (fn: () => Promise<void>, done?: string, log?: boolean) => Promise<boolean>;
+  },
+  form: { attachUrl: string; attachToken: string },
+): Promise<boolean> {
+  if (!form.attachUrl.trim() || !form.attachToken.trim()) return false;
+  return props.run(async () => {
+    const host = await attachHost(form.attachUrl, form.attachToken);
+    props.onAttach?.(host);
+  });
 }
 
 function OverlayFields(props: {
@@ -489,15 +491,14 @@ function OverlayFields(props: {
   setRam: (v: string) => void;
   disk: string;
   setDisk: (v: string) => void;
-  path: string;
-  setPath: (v: string) => void;
-  pubPort: string;
-  setPubPort: (v: string) => void;
-  hostPort: string;
-  setHostPort: (v: string) => void;
-  published: Published[];
-  replace: boolean;
-  setReplace: (v: boolean) => void;
+  attachUrl: string;
+  setAttachUrl: (v: string) => void;
+  attachToken: string;
+  setAttachToken: (v: string) => void;
+  hosts: HostRec[];
+  hostPick: string;
+  setHostPick: (v: string) => void;
+  onDetach?: (id: string) => void;
   agents: AgentProgram[];
   envCfg: { [name: string]: EnvProgram };
   setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
@@ -518,9 +519,7 @@ function OverlayFields(props: {
         <SandboxList sandboxes={props.sandboxes} pick={props.pickSandbox} />
       </Show>
       <Show when={ov().kind === "destroy"}>
-        <p class="text-[13px]">
-          Destroy {props.sandboxName}? Workspace is gone unless copy-out already happened.
-        </p>
+        <p class="text-[13px]">Destroy {props.sandboxName}? Workspace is gone.</p>
       </Show>
       <Show when={ov().kind === "reset"}>
         <p class="text-[13px]">
@@ -543,6 +542,9 @@ function OverlayFields(props: {
           envVars={props.envVars}
           setEnvVars={props.setEnvVars}
           optErr={props.optErr}
+          hosts={props.hosts}
+          hostPick={props.hostPick}
+          setHostPick={props.setHostPick}
         />
       </Show>
       <Show when={ov().kind === "save-template"}>
@@ -555,16 +557,27 @@ function OverlayFields(props: {
           />
         </label>
       </Show>
-      <Show when={ov().kind === "publish"}>
-        <PublishFields
-          overlay={ov()}
-          published={props.published}
-          pubPort={props.pubPort}
-          setPubPort={props.setPubPort}
-          hostPort={props.hostPort}
-          setHostPort={props.setHostPort}
-          run={props.run}
-        />
+      <Show when={ov().kind === "attach"}>
+        <label class={label}>
+          URL
+          <input
+            class={field}
+            value={props.attachUrl}
+            placeholder="http://192.168.1.5:5418"
+            onInput={(e) => props.setAttachUrl(e.currentTarget.value)}
+          />
+        </label>
+        <label class={label}>
+          token
+          <input
+            class={field}
+            value={props.attachToken}
+            onInput={(e) => props.setAttachToken(e.currentTarget.value)}
+          />
+        </label>
+      </Show>
+      <Show when={ov().kind === "hosts"}>
+        <HostList hosts={props.hosts} onDetach={props.onDetach} />
       </Show>
       <Show when={ov().kind === "limits"}>
         <LimitsFields
@@ -600,25 +613,35 @@ function OverlayFields(props: {
           optErr={props.optErr}
         />
       </Show>
-      <Show when={ov().kind === "copy"}>
-        <label class={label}>
-          host path
-          <input
-            class={field}
-            value={props.path}
-            onInput={(e) => props.setPath(e.currentTarget.value)}
-          />
-        </label>
-        <label class="mt-2 flex items-center gap-2 font-bold">
-          <input
-            type="checkbox"
-            checked={props.replace}
-            onChange={(e) => props.setReplace(e.currentTarget.checked)}
-          />
-          replace
-        </label>
-      </Show>
     </>
+  );
+}
+
+function HostList(props: { hosts: HostRec[]; onDetach?: (id: string) => void }) {
+  return (
+    <div class="max-h-64 overflow-y-auto border border-neutral-400">
+      <For
+        each={props.hosts}
+        keyed={(h) => h.id}
+        fallback={<div class="px-2 py-1 text-[12px]">no Hosts Attached</div>}
+      >
+        {(h) => (
+          <div class="flex items-center justify-between gap-2 border-t border-neutral-300 px-2 py-1">
+            <div class="min-w-0">
+              <div class="truncate font-bold">{h().label}</div>
+              <div class="truncate text-[12px]">{h().url}</div>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 border border-twm-line bg-twm px-2 py-0.5 font-bold text-white"
+              onClick={() => props.onDetach?.(h().id)}
+            >
+              Detach
+            </button>
+          </div>
+        )}
+      </For>
+    </div>
   );
 }
 
@@ -659,9 +682,22 @@ function NewSandboxFields(props: {
   envVars: string;
   setEnvVars: (v: string) => void;
   optErr: string;
+  hosts: HostRec[];
+  hostPick: string;
+  setHostPick: (v: string) => void;
 }) {
   return (
     <>
+      <Show when={props.hosts.length > 1}>
+        <div class={label}>
+          Host
+          <FieldSelect
+            value={props.hostPick}
+            options={props.hosts.map((h) => ({ value: h.id, label: h.label }))}
+            onChange={props.setHostPick}
+          />
+        </div>
+      </Show>
       <label class={label}>
         name
         <input
@@ -704,61 +740,6 @@ function NewSandboxFields(props: {
           optErr={props.optErr}
         />
       </Show>
-    </>
-  );
-}
-
-function PublishFields(props: {
-  overlay: Overlay;
-  published: Published[];
-  pubPort: string;
-  setPubPort: (v: string) => void;
-  hostPort: string;
-  setHostPort: (v: string) => void;
-  run: (fn: () => Promise<void>) => Promise<boolean>;
-}) {
-  return (
-    <>
-      <For each={props.published} keyed={(p) => p.port}>
-        {(p) => (
-          <div class="flex items-center justify-between gap-2 text-[12px]">
-            <a class="min-w-0 truncate text-twm" href={p().url}>
-              {p().url}
-            </a>
-            <span>:{p().port}</span>
-            <button
-              type="button"
-              class="border border-twm-line bg-twm px-2 py-0.5 font-bold text-white"
-              onClick={() => {
-                const ov = props.overlay;
-                if (ov.kind !== "publish") return;
-                const port = p().port;
-                void props.run(async () => {
-                  await api.unpublish(ov.id, port);
-                });
-              }}
-            >
-              Unpublish
-            </button>
-          </div>
-        )}
-      </For>
-      <label class={label}>
-        sandbox port
-        <input
-          class={field}
-          value={props.pubPort}
-          onInput={(e) => props.setPubPort(e.currentTarget.value)}
-        />
-      </label>
-      <label class={label}>
-        host port (optional)
-        <input
-          class={field}
-          value={props.hostPort}
-          onInput={(e) => props.setHostPort(e.currentTarget.value)}
-        />
-      </label>
     </>
   );
 }

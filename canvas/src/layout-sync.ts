@@ -77,7 +77,12 @@ export function sameSandboxes(a: Sandbox[], b: Sandbox[]): boolean {
     const left = a[i];
     const right = b[i];
     if (!left || !right) return false;
-    if (left.id !== right.id || left.state !== right.state || left.booting !== right.booting) {
+    if (
+      left.id !== right.id ||
+      left.host !== right.host ||
+      left.state !== right.state ||
+      left.booting !== right.booting
+    ) {
       return false;
     }
   }

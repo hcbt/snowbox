@@ -15,7 +15,7 @@ A persistent isolated Nix-built Linux environment on one Host. A Sandbox belongs
 _Avoid_: guest, VM, microVM, container, box, machine, environment (for the instance), NixOS (as a button), Ubuntu
 
 **Workspace**:
-The project files stored on a Sandbox’s own disk at `/workspace`. Exactly one Workspace per Sandbox. The Sandbox is the source of truth. The Host has no live view of these files. Files enter from inside the Sandbox. v1 still has copy-in/out; they go.
+The project files stored on a Sandbox’s own disk at `/workspace`. Exactly one Workspace per Sandbox. The Sandbox is the source of truth. The Host has no live view of these files. Files enter from inside the Sandbox.
 _Avoid_: mount, share, project folder, repo (when you mean the Workspace as a whole), copy-in, copy-out
 
 **Home**:
@@ -27,7 +27,7 @@ A command that runs *inside* a Sandbox and drives coding work. First-class Agent
 _Avoid_: bot, assistant, LLM, model (as product nouns)
 
 **Daemon**:
-The Host process that owns that Host’s Sandboxes, Cache, Environment, Layout, and token, and serves the Canvas files plus the API. Closing the browser does not stop Sandboxes or forget Layout. Quitting the Daemon writes machine state and stops running guests; disks, Layout, and that state stay. Callers present the token from that Host’s user config. Loopback is not auth. v1 binds `127.0.0.1`; callers are on this Host. Later, callers may be a Canvas the person Attached from another machine. It is the only writer of the Cache on this Host.
+The Host process that owns that Host’s Sandboxes, Cache, Environment, Layout, and token, and serves the Canvas files plus the API. Closing the browser does not stop Sandboxes or forget Layout. Quitting the Daemon writes machine state and stops running guests; disks, Layout, and that state stay. Callers present the token from that Host’s user config. Loopback is not auth. The API listens on all interfaces; callers may be this Host or a Canvas the person Attached from another machine. It is the only writer of the Cache on this Host.
 _Avoid_: server, backend, engine, runtime, app (when you mean this process), platform, cloud
 
 **Cache**:
@@ -55,7 +55,7 @@ Delete a Sandbox. Workspace is gone. The only verb that deletes the Workspace.
 _Avoid_: remove, delete, rm, reset
 
 **Publish**:
-v1 maps a Sandbox port onto `127.0.0.1` on the Host so a Host browser can open a server the Agent started. Default closed. Not on the LAN. Goes; not part of later.
+Not a Snowbox verb. Guest ports stay closed to the Host.
 _Avoid_: expose, forward, ingress, port map
 
 **Secret**:

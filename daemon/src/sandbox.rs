@@ -270,55 +270,6 @@ impl Store {
         Ok(())
     }
 
-    pub fn copy_in(&self, id: Uuid, from: &Path, replace: bool) -> Result<Sandbox, ActionError> {
-        self.require_stopped(id)?;
-        let from = jail_source(from)?;
-        if !from.exists() {
-            return Err(ActionError::BadRequest("source does not exist"));
-        }
-        let workspace = self.dir(id).join("workspace");
-        if is_non_empty(&workspace) && !replace {
-            return Err(ActionError::Conflict("replace required"));
-        }
-        if replace && workspace.exists() {
-            fs::remove_dir_all(&workspace).map_err(|_| ActionError::Internal)?;
-            fs::create_dir_all(&workspace).map_err(|_| ActionError::Internal)?;
-        }
-        put_into_workspace(&from, &workspace)?;
-        self.get(id)
-    }
-
-    pub fn copy_out(&self, id: Uuid, to: &Path, replace: bool) -> Result<Sandbox, ActionError> {
-        self.require_stopped(id)?;
-        let to = jail_dest(to)?;
-        let workspace = self.dir(id).join("workspace");
-        if is_non_empty(&to) && !replace {
-            return Err(ActionError::Conflict("replace required"));
-        }
-        if replace && to.exists() {
-            if to.is_dir() {
-                fs::remove_dir_all(&to).map_err(|_| ActionError::Internal)?;
-            } else {
-                fs::remove_file(&to).map_err(|_| ActionError::Internal)?;
-            }
-        }
-        if is_non_empty(&workspace) {
-            copy_tree(&workspace, &to)?;
-        } else {
-            fs::create_dir_all(&to).map_err(|_| ActionError::Internal)?;
-        }
-        self.get(id)
-    }
-
-    fn require_stopped(&self, id: Uuid) -> Result<(), ActionError> {
-        let map = self.inner.lock().expect("sandbox store");
-        let rec = map.get(&id).ok_or(ActionError::NotFound)?;
-        if rec.state != State::Stopped {
-            return Err(ActionError::Conflict("sandbox is running"));
-        }
-        Ok(())
-    }
-
     fn set_state(
         &self,
         id: Uuid,
@@ -403,140 +354,6 @@ fn reset_tree(dir: &Path) -> Result<(), ActionError> {
     Ok(())
 }
 
-fn put_into_workspace(from: &Path, workspace: &Path) -> Result<(), ActionError> {
-    fs::create_dir_all(workspace).map_err(|_| ActionError::Internal)?;
-    let meta = from.symlink_metadata().map_err(|_| ActionError::Internal)?;
-    if meta.is_symlink() {
-        return Err(ActionError::BadRequest("source is a symlink"));
-    }
-    if meta.is_file() {
-        let name = from
-            .file_name()
-            .ok_or(ActionError::BadRequest("source has no name"))?;
-        copy_tree(from, &workspace.join(name))?;
-        return Ok(());
-    }
-    copy_tree(from, workspace)
-}
-
-fn copy_tree(src: &Path, dst: &Path) -> Result<(), ActionError> {
-    let meta = src.symlink_metadata().map_err(|_| ActionError::Internal)?;
-    if meta.is_symlink() {
-        return Err(ActionError::BadRequest("refusing to copy symlink"));
-    }
-    if meta.is_file() {
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent).map_err(|_| ActionError::Internal)?;
-        }
-        fs::copy(src, dst).map_err(|_| ActionError::Internal)?;
-        return Ok(());
-    }
-    fs::create_dir_all(dst).map_err(|_| ActionError::Internal)?;
-    for entry in fs::read_dir(src).map_err(|_| ActionError::Internal)? {
-        let entry = entry.map_err(|_| ActionError::Internal)?;
-        copy_tree(&entry.path(), &dst.join(entry.file_name()))?;
-    }
-    Ok(())
-}
-
-fn canonical_absolute(path: &Path) -> Result<PathBuf, ActionError> {
-    if !path.is_absolute() {
-        return Err(ActionError::BadRequest("path must be absolute"));
-    }
-    if path.exists() {
-        return path
-            .canonicalize()
-            .map_err(|_| ActionError::BadRequest("path is not allowed"));
-    }
-    let mut cur = path.to_path_buf();
-    let mut missing = Vec::new();
-    while !cur.exists() {
-        let name = cur
-            .file_name()
-            .ok_or(ActionError::BadRequest("path must be absolute"))?
-            .to_os_string();
-        missing.push(name);
-        match cur.parent() {
-            Some(parent) if parent != cur.as_path() => cur = parent.to_path_buf(),
-            _ => return Err(ActionError::BadRequest("path is not allowed")),
-        }
-    }
-    let mut resolved = cur
-        .canonicalize()
-        .map_err(|_| ActionError::BadRequest("path is not allowed"))?;
-    for name in missing.into_iter().rev() {
-        resolved.push(name);
-    }
-    Ok(resolved)
-}
-
-fn jail_source(from: &Path) -> Result<PathBuf, ActionError> {
-    canonical_absolute(from)
-}
-
-fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in path.components() {
-        match c {
-            std::path::Component::RootDir => out.push("/"),
-            std::path::Component::Prefix(p) => out.push(p.as_os_str()),
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                let _ = out.pop();
-            }
-            std::path::Component::Normal(s) => out.push(s),
-        }
-    }
-    out
-}
-
-fn jail_dest(to: &Path) -> Result<PathBuf, ActionError> {
-    if !to.is_absolute() {
-        return Err(ActionError::BadRequest("path must be absolute"));
-    }
-    if dest_forbidden(&lexical_normalize(to)) {
-        return Err(ActionError::BadRequest("path is not allowed"));
-    }
-    let to = canonical_absolute(to)?;
-    if dest_forbidden(&to) {
-        return Err(ActionError::BadRequest("path is not allowed"));
-    }
-    Ok(to)
-}
-
-fn dest_forbidden(path: &Path) -> bool {
-    if path == Path::new("/") {
-        return true;
-    }
-    if path == Path::new("/Users") || path == Path::new("/home") || path == Path::new("/root") {
-        return true;
-    }
-    if is_unix_home_root(path) {
-        return true;
-    }
-    if let Some(home) = dirs::home_dir() {
-        if path == home {
-            return true;
-        }
-    }
-    if let Some(data) = dirs::data_dir() {
-        let snow = data.join("snowbox");
-        if path == snow || path.starts_with(&snow) {
-            return true;
-        }
-    }
-    path.starts_with("/nix/store") || path.starts_with("/etc") || path.starts_with("/private/etc")
-}
-
-fn is_unix_home_root(path: &Path) -> bool {
-    let comps: Vec<_> = path.components().collect();
-    matches!(
-        comps.as_slice(),
-        [std::path::Component::RootDir, std::path::Component::Normal(dir), std::path::Component::Normal(_name)]
-            if *dir == "Users" || *dir == "home"
-    )
-}
-
 /// home-manager writes `home/.nix-profile` as 0555. `remove_dir_all`
 /// cannot unlink children of a directory without owner-write.
 fn make_deletable(path: &Path) -> std::io::Result<()> {
@@ -571,19 +388,6 @@ fn make_deletable(path: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
-}
-
-fn is_non_empty(path: &Path) -> bool {
-    if !path.exists() {
-        return false;
-    }
-    let Ok(meta) = path.symlink_metadata() else {
-        return false;
-    };
-    if meta.is_file() {
-        return meta.len() > 0;
-    }
-    fs::read_dir(path).ok().and_then(|mut i| i.next()).is_some()
 }
 
 #[cfg(test)]
@@ -744,41 +548,6 @@ mod tests {
     }
 
     #[test]
-    fn copy_in_replace_and_copy_out() {
-        let (tmp, store) = store();
-        let sb = store.create(None).unwrap();
-        let src = tmp.path().join("src");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("readme"), "one").unwrap();
-        store.copy_in(sb.id, &src, false).unwrap();
-        assert_eq!(
-            fs::read_to_string(tmp.path().join(sb.id.to_string()).join("workspace/readme"))
-                .unwrap(),
-            "one"
-        );
-
-        fs::write(src.join("readme"), "two").unwrap();
-        let err = store.copy_in(sb.id, &src, false).unwrap_err();
-        assert!(matches!(err, ActionError::Conflict("replace required")));
-
-        store.copy_in(sb.id, &src, true).unwrap();
-        let dest = tmp.path().join("out");
-        store.copy_out(sb.id, &dest, false).unwrap();
-        assert_eq!(fs::read_to_string(dest.join("readme")).unwrap(), "two");
-    }
-
-    #[test]
-    fn copy_in_refused_while_running() {
-        let (tmp, store) = store();
-        let sb = store.create(None).unwrap();
-        store.start(sb.id).unwrap();
-        let src = tmp.path().join("f.txt");
-        fs::write(&src, "x").unwrap();
-        let err = store.copy_in(sb.id, &src, true).unwrap_err();
-        assert!(matches!(err, ActionError::Conflict("sandbox is running")));
-    }
-
-    #[test]
     fn reset_rewinds_environment_and_wipes_home() {
         let (_tmp, store) = store();
         let sb = store.create(Some("r".into())).unwrap();
@@ -871,74 +640,6 @@ mod tests {
         assert!(matches!(
             store.get(b.id).unwrap_err(),
             ActionError::NotFound
-        ));
-    }
-
-    #[test]
-    fn copy_out_replace_home_is_refused() {
-        let (tmp, store) = store();
-        let sb = store.create(None).unwrap();
-        let src = tmp.path().join("src");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("a"), "1").unwrap();
-        store.copy_in(sb.id, &src, false).unwrap();
-        let home = dirs::home_dir().expect("home");
-        let err = store.copy_out(sb.id, &home, true).unwrap_err();
-        assert!(matches!(
-            err,
-            ActionError::BadRequest("path is not allowed")
-        ));
-        assert!(home.exists());
-    }
-
-    #[test]
-    fn copy_out_traversal_to_users_is_refused() {
-        let (tmp, store) = store();
-        let sb = store.create(None).unwrap();
-        let src = tmp.path().join("src");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("a"), "1").unwrap();
-        store.copy_in(sb.id, &src, false).unwrap();
-        let sneaky = PathBuf::from("/tmp/../Users");
-        let err = store.copy_out(sb.id, &sneaky, true).unwrap_err();
-        assert!(matches!(
-            err,
-            ActionError::BadRequest("path is not allowed")
-        ));
-    }
-
-    #[test]
-    fn copy_out_to_root_and_etc_are_refused() {
-        let (tmp, store) = store();
-        let sb = store.create(None).unwrap();
-        let src = tmp.path().join("src");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("a"), "1").unwrap();
-        store.copy_in(sb.id, &src, false).unwrap();
-        let err = store.copy_out(sb.id, Path::new("/"), true).unwrap_err();
-        assert!(matches!(
-            err,
-            ActionError::BadRequest("path is not allowed")
-        ));
-        let err = store
-            .copy_out(sb.id, Path::new("/etc/passwd"), true)
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            ActionError::BadRequest("path is not allowed")
-        ));
-    }
-
-    #[test]
-    fn copy_in_relative_path_is_refused() {
-        let (_tmp, store) = store();
-        let sb = store.create(None).unwrap();
-        let err = store
-            .copy_in(sb.id, Path::new("relative"), false)
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            ActionError::BadRequest("path must be absolute")
         ));
     }
 

@@ -4,8 +4,11 @@ use anyhow::{Context, Result};
 use axum::{
     extract::{Request, State},
     http::{
-        HeaderValue, StatusCode,
-        header::{AUTHORIZATION, COOKIE, ORIGIN, SET_COOKIE, UPGRADE},
+        HeaderValue, Method, StatusCode,
+        header::{
+            ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+            ACCESS_CONTROL_ALLOW_ORIGIN, AUTHORIZATION, COOKIE, HOST, ORIGIN, SET_COOKIE, UPGRADE,
+        },
     },
     middleware::Next,
     response::Response,
@@ -45,17 +48,12 @@ pub async fn attach_session(
     response
 }
 
-/// Window WS upgrades must come from this Daemon's Canvas origin.
+/// Window WS upgrades must come from a Canvas origin (http on this port).
 pub async fn require_ws_origin(
     request: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, axum::Json<serde_json::Value>)> {
-    let is_ws = request
-        .headers()
-        .get(UPGRADE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|s| s.eq_ignore_ascii_case("websocket"));
-    if !is_ws {
+    if !is_websocket(&request) {
         return Ok(next.run(request).await);
     }
     let origin = request
@@ -70,6 +68,44 @@ pub async fn require_ws_origin(
     }
 }
 
+/// Reflect Canvas origins so one Canvas can call another Host.
+pub async fn cors(request: Request, next: Next) -> Response {
+    let origin = request.headers().get(ORIGIN).cloned();
+    if request.method() == Method::OPTIONS {
+        let mut response = Response::new(axum::body::Body::empty());
+        *response.status_mut() = StatusCode::NO_CONTENT;
+        apply_cors(&mut response, origin.as_ref());
+        return response;
+    }
+    let mut response = next.run(request).await;
+    apply_cors(&mut response, origin.as_ref());
+    response
+}
+
+fn apply_cors(response: &mut Response, origin: Option<&HeaderValue>) {
+    let Some(value) = origin else {
+        return;
+    };
+    let Ok(s) = value.to_str() else {
+        return;
+    };
+    if !origin_allowed(s, listen_port()) {
+        return;
+    }
+    response
+        .headers_mut()
+        .insert(ACCESS_CONTROL_ALLOW_ORIGIN, value.clone());
+    response.headers_mut().insert(
+        ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("authorization, content-type"),
+    );
+    response.headers_mut().insert(
+        ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, POST, PUT, PATCH, DELETE, OPTIONS"),
+    );
+}
+
+/// A Canvas origin is HTTP on this Daemon's port, any host.
 pub fn origin_allowed(origin: &str, port: u16) -> bool {
     let Ok(uri) = origin.parse::<axum::http::Uri>() else {
         return false;
@@ -77,16 +113,30 @@ pub fn origin_allowed(origin: &str, port: u16) -> bool {
     if uri.scheme_str() != Some("http") {
         return false;
     }
-    let Some(host) = uri.host() else {
-        return false;
-    };
-    if host != "127.0.0.1" && !host.eq_ignore_ascii_case("localhost") {
+    if uri.host().is_none() {
         return false;
     }
     if uri.port_u16() != Some(port) {
         return false;
     }
     matches!(uri.path(), "" | "/")
+}
+
+/// Token in HTML only when the browser asked for loopback (local convenience).
+pub fn loopback_host(host: Option<&str>) -> bool {
+    let Some(host) = host else {
+        return false;
+    };
+    let host = host.split(':').next().unwrap_or(host);
+    host == "127.0.0.1" || host.eq_ignore_ascii_case("localhost")
+}
+
+pub fn request_host(request: &Request) -> Option<&str> {
+    request
+        .headers()
+        .get(HOST)
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| request.uri().host())
 }
 
 pub fn embed_token_in_canvas(html: &str, token: &str) -> String {
@@ -124,7 +174,28 @@ fn request_has_token(request: &Request, token: &str) -> bool {
 }
 
 fn presented(request: &Request) -> Option<&str> {
-    bearer(request).or_else(|| cookie_token(request))
+    bearer(request)
+        .or_else(|| cookie_token(request))
+        .or_else(|| {
+            if is_websocket(request) {
+                query_token(request)
+            } else {
+                None
+            }
+        })
+}
+
+fn is_websocket(request: &Request) -> bool {
+    request
+        .headers()
+        .get(UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|s| s.eq_ignore_ascii_case("websocket"))
+}
+
+fn query_token(request: &Request) -> Option<&str> {
+    let q = request.uri().query()?;
+    q.split('&').find_map(|part| part.strip_prefix("token="))
 }
 
 fn bearer(request: &Request) -> Option<&str> {
@@ -190,17 +261,27 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
-    fn origin_this_daemon_only() {
+    fn origin_canvas_port() {
         assert!(origin_allowed("http://127.0.0.1:5418", 5418));
         assert!(origin_allowed("http://localhost:5418", 5418));
         assert!(origin_allowed("http://127.0.0.1:5418/", 5418));
+        assert!(origin_allowed("http://192.168.1.5:5418", 5418));
         assert!(!origin_allowed("http://127.0.0.1:5418", 80));
         assert!(!origin_allowed("http://127.0.0.1", 5418));
-        assert!(!origin_allowed("http://evil.example:5418", 5418));
         assert!(!origin_allowed("https://127.0.0.1:5418", 5418));
         assert!(!origin_allowed("", 5418));
         assert!(!origin_allowed("http://127.0.0.1:9999", 5418));
         assert!(!origin_allowed("http://127.0.0.1:5418/pty", 5418));
+        assert!(!origin_allowed("http://evil.example:80", 5418));
+    }
+
+    #[test]
+    fn loopback_host_names() {
+        assert!(loopback_host(Some("127.0.0.1")));
+        assert!(loopback_host(Some("127.0.0.1:5418")));
+        assert!(loopback_host(Some("localhost")));
+        assert!(!loopback_host(Some("192.168.1.5:5418")));
+        assert!(!loopback_host(None));
     }
 
     #[test]
