@@ -530,10 +530,7 @@ function LogWindow(props: {
       onMoveEnd={props.onMoveEnd}
       onClose={props.onClose}
     >
-      <div
-        data-log
-        class="h-full overflow-auto bg-night-surface px-4 py-3.5 font-mono text-[12px] leading-[18px] text-night-text"
-      >
+      <div data-log class="twm-log">
         <For each={props.lines} keyed={false} fallback={<div class="text-twm-muted">waiting…</div>}>
           {(line) => <div>{line()}</div>}
         </For>
@@ -547,11 +544,7 @@ function StatusLine(props: { busy: boolean; status: string }) {
     if (props.busy) return props.status || "working…";
     return props.status || "ready";
   };
-  return (
-    <div class="twm-sheen pointer-events-none fixed bottom-4 left-4 px-2.5 py-1 font-mono text-[12px] leading-4 font-bold text-white">
-      {text()}
-    </div>
-  );
+  return <div class="twm-sheen twm-status">{text()}</div>;
 }
 
 function IconManager(props: {
@@ -588,14 +581,14 @@ function IconManager(props: {
         onClose={props.hide}
         onContextMenu={(e) => props.openMenu(e)}
       >
-        <div class="h-full overflow-auto bg-twm">
+        <div class="h-full overflow-auto">
           <For each={props.layout.windows} keyed={(w) => w.id}>
             {(w) => (
               <button
                 type="button"
-                class={`flex h-8 w-full items-center overflow-hidden border-0 border-t border-twm-line px-3 text-left font-medium whitespace-nowrap hover:bg-white/16 ${
-                  props.focus === w().id ? "bg-white/16" : ""
-                } ${props.live(w().sandbox) ? "text-white" : "text-twm-muted"}`}
+                class={`twm-icon-row${props.focus === w().id ? " twm-icon-row-on" : ""}${
+                  props.live(w().sandbox) ? "" : " twm-icon-row-off"
+                }`}
                 onClick={() => {
                   props.patchWin(w().id, { iconified: false }, true);
                   props.raise(w().id);
@@ -623,7 +616,7 @@ function IconManager(props: {
             {(s) => (
               <button
                 type="button"
-                class="flex h-8 w-full items-center overflow-hidden border-0 border-t border-twm-line px-3 text-left font-medium text-twm-muted whitespace-nowrap hover:bg-white/16 hover:text-white"
+                class="twm-icon-row twm-icon-row-off"
                 onClick={() => {
                   if (props.busy) return;
                   props.run(
@@ -701,6 +694,7 @@ function CanvasWindows(props: {
             onResize={(nw, nh) => props.patchWin(w().id, { w: nw, h: nh })}
             onIconify={() => props.patchWin(w().id, { iconified: true }, true)}
             onEnvironment={() => props.onEnvironment(w().sandbox)}
+            onClose={() => props.run(() => clientFor(props.hosts, w().host).closeWindow(w().id))}
           >
             <Show
               when={props.live(w().sandbox)}

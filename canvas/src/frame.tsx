@@ -97,7 +97,7 @@ export function Frame(props: {
       ref={(el) => {
         root = el;
       }}
-      class={`twm-float absolute flex min-h-20 min-w-[180px] flex-col${props.sheen ? " twm-sheen" : ""}`}
+      class={`twm-float absolute flex min-h-[80px] min-w-[180px] flex-col${props.sheen ? " twm-sheen" : ""}`}
       data-win={props.dataWin}
       style={{
         left: `${props.x}px`,
@@ -114,10 +114,7 @@ export function Frame(props: {
         props.onContextMenu(e);
       }}
     >
-      <div
-        class="twm-bar flex h-7 shrink-0 cursor-grab items-center gap-2 px-2 text-[13px] leading-4 font-medium tracking-[0.01em] text-white active:cursor-grabbing"
-        onMouseDown={(e) => drag(e, "move")}
-      >
+      <div class="twm-bar cursor-grab active:cursor-grabbing" onMouseDown={(e) => drag(e, "move")}>
         <span class="twm-win-icon" />
         <span class="min-w-0 flex-1 overflow-hidden whitespace-nowrap">{props.title}</span>
         <Show when={props.onEnvironment}>
@@ -137,16 +134,14 @@ export function Frame(props: {
         <Show when={props.onIconify}>
           <button
             type="button"
-            class="twm-win-btn bg-twm"
+            class="twm-win-btn twm-iconify"
             title="Iconify"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               props.onIconify?.();
             }}
-          >
-            <span class="h-0.5 w-2 bg-white" />
-          </button>
+          />
         </Show>
         <Show when={props.onClose}>
           <button
@@ -163,9 +158,7 @@ export function Frame(props: {
           </button>
         </Show>
       </div>
-      <div
-        class={`relative min-h-0 flex-1 border-x border-b border-twm${props.sheen ? "" : " bg-night-surface"}`}
-      >
+      <div class={`twm-body${props.sheen ? " twm-body-panel" : ""}`}>
         {props.children}
         <Show when={props.onResize && props.w !== undefined && props.h !== undefined}>
           <div
