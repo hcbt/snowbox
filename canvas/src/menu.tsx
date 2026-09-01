@@ -45,7 +45,7 @@ export function RootMenu(props: {
       style={{ left: `${props.x}px`, top: `${props.y}px` }}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div class="bg-twm-head px-2.5 py-0.5 font-bold text-twm">snowbox</div>
+      <div class="px-2.5 py-0.5 font-bold text-white">snowbox</div>
       <button type="button" class={item} onClick={() => go(props.onNewSandbox)}>
         New Sandbox
       </button>
