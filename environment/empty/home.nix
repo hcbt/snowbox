@@ -26,25 +26,22 @@ in
       format = "$username$hostname$directory$character";
       username = {
         show_always = true;
-        format = "[$user]($style)";
-        style_user = "#ededef";
-        style_root = "#ededef";
+        format = "$user";
       };
       hostname = {
         ssh_only = false;
-        format = "[@$hostname]($style)";
-        style = "#ededef";
+        format = "@$hostname";
       };
       directory = {
-        format = "[:$path]($style)";
-        style = "#ededef";
+        format = ":$path";
         truncate_to_repo = false;
         truncation_length = 8;
       };
       character = {
         # Starship literal $ is \$; Nix [\$] drops the slash. $$ still fails to parse.
-        success_symbol = "[\\$](#ededef)";
-        error_symbol = "[\\$](#ededef)";
+        # Style without a color so the Window xterm foreground follows Theme×Mode.
+        success_symbol = "[\\$](bold)";
+        error_symbol = "[\\$](bold)";
       };
     };
   }
