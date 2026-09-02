@@ -95,6 +95,7 @@
       "nix-command"
       "flakes"
     ];
+    nixpkgs.config.allowUnfree = true;
 
     users.mutableUsers = false;
     users.allowNoPasswordLogin = true;

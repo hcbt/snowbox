@@ -27,7 +27,10 @@
       mk =
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs {
+            inherit system;
+            config.allowUnfree = true;
+          };
           control = mkControl pkgs;
           nixos = nixpkgs.lib.nixosSystem {
             inherit system;
