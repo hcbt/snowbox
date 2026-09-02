@@ -235,10 +235,10 @@ export function OverlayDialog(props: {
         }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <Show when={!bar()}>
-          <div class="twm-overlay-head">{title()}</div>
-        </Show>
         <div class="min-h-0 flex-1 overflow-auto px-3.5 py-3">
+          <Show when={!bar()}>
+            <div class="twm-overlay-head">{title()}</div>
+          </Show>
           <OverlayFields
             overlay={props.overlay}
             sandboxName={sbName()}

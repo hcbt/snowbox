@@ -18,6 +18,7 @@
   --color-frame: #6b3a9e;
   --color-icon-bg: #6b3a9e;
   --color-icon-text: #ffffff;
+  --color-icon-off: #c4a8e0;
   --font-twm: HelveticaNeue-Medium, "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: Menlo, ui-monospace, monospace;
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
@@ -54,6 +55,7 @@
     --color-night-surface: #ffffff;
     --color-night-text: #262626;
     --color-twm-muted: #525252;
+    --color-icon-off: #525252;
   }
 
   html[data-theme="rio"] {
@@ -64,6 +66,7 @@
     --color-frame: #6ad4de;
     --color-icon-bg: #d4eef2;
     --color-icon-text: #1a1a1a;
+    --color-icon-off: #2a7884;
   }
 
   html[data-theme="rio"][data-mode="day"] {
@@ -71,17 +74,19 @@
     --color-night-raised: #fff3c4;
     --color-night-surface: #fff8e0;
     --color-night-text: #1a1a1a;
-    --color-twm-muted: #2a7884;
   }
 
   html[data-theme="rio"][data-mode="night"] {
-    --color-night: #121414;
-    --color-night-raised: #1c4048;
+    --color-night-raised: #22241c;
     --color-night-surface: #1a1c1a;
-    --color-night-text: #ededef;
     --color-icon-bg: #1c4048;
-    --color-icon-text: #d4eef2;
-    --color-twm-muted: #a8d4d8;
+    --color-icon-text: #ededef;
+    --color-icon-off: #a8d4d8;
+    background-image: linear-gradient(
+      in oklab 180deg,
+      oklab(24.7% -0.007 -0.006) 0%,
+      oklab(20.1% 0.001 -0.004) 100%
+    );
   }
 
   body,
@@ -152,6 +157,14 @@
     background-image: radial-gradient(
       ellipse 90% 70% at 85% 10% in oklab,
       oklab(54.9% 0.078 -0.126) 0%,
+      transparent 68%
+    );
+  }
+
+  html[data-theme="rio"] .twm-sheen {
+    background-image: radial-gradient(
+      ellipse 90% 70% at 85% 10% in oklab,
+      oklab(100% 0 0 / 18%) 0%,
       transparent 68%
     );
   }
@@ -342,7 +355,7 @@
   }
 
   .twm-icon-row-off {
-    color: var(--color-twm-muted);
+    color: var(--color-icon-off, var(--color-twm-muted));
   }
 
   .twm-icon-row-off:hover {
@@ -380,6 +393,7 @@
   .twm-icons {
     background-color: var(--color-icon-bg);
     padding: 4px;
+    box-shadow: 0 16px 40px #00000059;
   }
 
   html[data-theme="rio"] .twm-icons .twm-body,
@@ -389,15 +403,16 @@
   }
 
   .twm-overlay-head {
-    padding: 14px 16px 8px;
+    padding-bottom: 8px;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 700;
     line-height: 16px;
     color: var(--color-night-text);
   }
 
   html[data-theme="rio"] .twm-float {
     border: 2px solid var(--color-frame);
+    box-shadow: 0 16px 40px #00000073;
   }
 
   html[data-theme="rio"] .twm-body {
@@ -407,16 +422,17 @@
   html[data-theme="rio"] .twm-icon-row {
     height: 26px;
     border-top-color: var(--color-frame);
-    padding-inline: 8px;
+    padding-inline: 12px;
   }
 
-  html[data-theme="rio"] .twm-icon-row:hover,
-  html[data-theme="rio"] .twm-icon-row-on {
+  html[data-theme="rio"][data-mode="night"] .twm-icon-row:hover,
+  html[data-theme="rio"][data-mode="night"] .twm-icon-row-on {
+    background: #ffffff14;
+  }
+
+  html[data-theme="rio"][data-mode="day"] .twm-icon-row:hover,
+  html[data-theme="rio"][data-mode="day"] .twm-icon-row-on {
     background: #00000014;
-  }
-
-  html[data-mode="day"] .twm-float {
-    box-shadow: 0 16px 40px #00000040;
   }
 
   .twm-log {
