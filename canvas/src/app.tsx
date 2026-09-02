@@ -593,7 +593,11 @@ function LogWindow(props: {
       onClose={props.onClose}
     >
       <div data-log class="twm-log">
-        <For each={props.lines} keyed={false} fallback={<div class="text-twm-muted">waiting…</div>}>
+        <For
+          each={props.lines}
+          keyed={false}
+          fallback={<div class="text-copy-muted">waiting…</div>}
+        >
           {(line) => <div>{line()}</div>}
         </For>
       </div>
@@ -767,7 +771,7 @@ function CanvasWindows(props: {
             <Show
               when={props.live(w().sandbox)}
               fallback={
-                <div class="flex h-full items-center justify-center font-twm text-[13px] text-twm-muted">
+                <div class="flex h-full items-center justify-center font-twm text-[13px] text-copy-muted">
                   {windowStatus(props.sandboxes, w().sandbox)}
                 </div>
               }

@@ -236,11 +236,19 @@ export function OverlayDialog(props: {
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div class="min-h-0 flex-1 overflow-auto px-3.5 py-3">
-          <Show when={!bar()}>
+          <Show
+            when={
+              !bar() &&
+              props.overlay.kind !== "destroy" &&
+              props.overlay.kind !== "reset" &&
+              props.overlay.kind !== "sandboxes"
+            }
+          >
             <div class="twm-overlay-head">{title()}</div>
           </Show>
           <OverlayFields
             overlay={props.overlay}
+            titlebar={bar()}
             sandboxName={sbName()}
             sandboxes={props.sandboxes}
             name={name()}
@@ -455,6 +463,7 @@ async function submitAttach(
 
 function OverlayFields(props: {
   overlay: Overlay;
+  titlebar: boolean;
   sandboxName: string;
   sandboxes: Sandbox[];
   name: string;
@@ -491,18 +500,34 @@ function OverlayFields(props: {
   return (
     <>
       <Show when={ov().kind === "sandboxes"}>
-        <SandboxList sandboxes={props.sandboxes} pick={props.pickSandbox} />
+        <SandboxList
+          sandboxes={props.sandboxes}
+          pick={props.pickSandbox}
+          heading={props.titlebar ? undefined : "Sandboxes"}
+        />
       </Show>
       <Show when={ov().kind === "destroy"}>
         <div class="flex flex-col gap-2">
-          <p class="text-[13px]">Destroy {props.sandboxName}?</p>
-          <p class="text-[13px] font-normal leading-[18px] text-twm-muted">Workspace is gone.</p>
+          <p
+            class={
+              props.titlebar ? "text-[13px] leading-4" : "twm-overlay-head twm-overlay-head-tight"
+            }
+          >
+            Destroy {props.sandboxName}?
+          </p>
+          <p class="text-[13px] font-normal leading-[18px] text-copy-muted">Workspace is gone.</p>
         </div>
       </Show>
       <Show when={ov().kind === "reset"}>
         <div class="flex flex-col gap-2">
-          <p class="text-[13px]">Reset {props.sandboxName}?</p>
-          <p class="text-[13px] font-normal leading-[18px] text-twm-muted">
+          <p
+            class={
+              props.titlebar ? "text-[13px] leading-4" : "twm-overlay-head twm-overlay-head-tight"
+            }
+          >
+            Reset {props.sandboxName}?
+          </p>
+          <p class="text-[13px] font-normal leading-[18px] text-copy-muted">
             Puts this Sandbox back to Create. The project stays. Linux home (logins, extra files) is
             wiped. The form goes back to how it was at Create.
           </p>
@@ -597,13 +622,13 @@ function HostList(props: { hosts: HostRec[]; onDetach?: (id: string) => void }) 
       <For
         each={props.hosts}
         keyed={(h) => h.id}
-        fallback={<div class="px-2 py-1 text-[12px] text-twm-muted">no Hosts Attached</div>}
+        fallback={<div class="px-2 py-1 text-[12px] text-copy-muted">no Hosts Attached</div>}
       >
         {(h) => (
           <div class="flex items-center justify-between gap-2 border-t border-twm-line px-2 py-1">
             <div class="min-w-0">
               <div class="truncate font-medium">{h().label}</div>
-              <div class="truncate text-[12px] text-twm-muted">{h().url}</div>
+              <div class="truncate text-[12px] text-copy-muted">{h().url}</div>
             </div>
             <button
               type="button"
@@ -619,24 +644,34 @@ function HostList(props: { hosts: HostRec[]; onDetach?: (id: string) => void }) 
   );
 }
 
-function SandboxList(props: { sandboxes: Sandbox[]; pick: (id: string) => void }) {
+function SandboxList(props: {
+  sandboxes: Sandbox[];
+  pick: (id: string) => void;
+  heading?: string;
+}) {
   return (
     <div class="max-h-64 overflow-y-auto border border-twm-line">
+      <Show when={props.heading}>
+        <div class="twm-overlay-head px-2 pt-1">{props.heading}</div>
+      </Show>
       <For
         each={props.sandboxes}
         keyed={(s) => s.id}
-        fallback={<div class="px-2 py-1 text-[12px] text-twm-muted">no Sandboxes</div>}
+        fallback={<div class="px-2 py-1 text-[12px] text-copy-muted">no Sandboxes</div>}
       >
-        {(s) => (
-          <button
-            type="button"
-            class="block w-full border-0 border-t border-twm-line bg-night-surface px-2 py-1 text-left hover:bg-twm-hi hover:text-white"
-            onClick={() => props.pick(s().id)}
-          >
-            <span class="font-medium">{s().name}</span>
-            <span class="ml-2 text-[12px]">{s().state}</span>
-          </button>
-        )}
+        {(s) => {
+          const off = () => s().state !== "running";
+          return (
+            <button
+              type="button"
+              class={`flex w-full items-center border-0 border-t border-twm-line bg-night-surface px-2 py-1 text-left hover:bg-twm-hi hover:text-white${off() ? " text-copy-muted" : ""}`}
+              onClick={() => props.pick(s().id)}
+            >
+              <span class="font-medium">{s().name}</span>
+              <span class="ml-2 text-[12px] font-normal">{s().state}</span>
+            </button>
+          );
+        }}
       </For>
     </div>
   );
@@ -990,7 +1025,7 @@ function EnvironmentFields(props: {
                 />
                 {name}
               </label>
-              <div class="text-[11px] text-twm-muted">{p().description}</div>
+              <div class="twm-env-desc">{p().description}</div>
               <For each={p().options.filter((o) => o.name !== "enable")} keyed={(o) => o.name}>
                 {(o) => (
                   <OptionField

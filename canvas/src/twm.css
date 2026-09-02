@@ -19,6 +19,7 @@
   --color-icon-bg: #6b3a9e;
   --color-icon-text: #ffffff;
   --color-icon-off: #c4a8e0;
+  --color-copy-muted: #c4a8e0;
   --font-twm: HelveticaNeue-Medium, "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: Menlo, ui-monospace, monospace;
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
@@ -54,8 +55,7 @@
     --color-night-raised: #ffffff;
     --color-night-surface: #ffffff;
     --color-night-text: #262626;
-    --color-twm-muted: #525252;
-    --color-icon-off: #525252;
+    --color-copy-muted: #525252;
   }
 
   html[data-theme="rio"] {
@@ -67,6 +67,7 @@
     --color-icon-bg: #d4eef2;
     --color-icon-text: #1a1a1a;
     --color-icon-off: #2a7884;
+    --color-copy-muted: #2a7884;
   }
 
   html[data-theme="rio"][data-mode="day"] {
@@ -82,6 +83,7 @@
     --color-icon-bg: #1c4048;
     --color-icon-text: #ededef;
     --color-icon-off: #a8d4d8;
+    --color-copy-muted: #a8d4d8;
     background-image: linear-gradient(
       in oklab 180deg,
       oklab(24.7% -0.007 -0.006) 0%,
@@ -115,6 +117,34 @@
     font: inherit;
     color: inherit;
     line-height: inherit;
+  }
+
+  input[type="checkbox"] {
+    appearance: none;
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    margin: 0;
+    border: 1px solid var(--color-twm-line);
+    border-radius: 2px;
+    background-color: var(--color-night-raised);
+  }
+
+  input[type="checkbox"]:checked {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--color-twm);
+  }
+
+  input[type="checkbox"]:checked::after {
+    width: 5px;
+    height: 9px;
+    margin-bottom: 2px;
+    border-right: 2px solid #fff;
+    border-bottom: 2px solid #fff;
+    content: "";
+    transform: rotate(45deg);
   }
 
   .xterm-helper-textarea {
@@ -407,6 +437,21 @@
     font-size: 13px;
     font-weight: 700;
     line-height: 16px;
+    color: var(--color-night-text);
+  }
+
+  .twm-overlay-head-tight {
+    padding-bottom: 0;
+  }
+
+  .twm-env-desc {
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 14px;
+    color: var(--color-copy-muted);
+  }
+
+  html[data-theme="rio"] .twm-env-desc {
     color: var(--color-night-text);
   }
 
