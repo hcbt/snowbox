@@ -19,11 +19,6 @@ in
   home.stateVersion = "26.05";
   programs = {
     bash.enable = true;
-    bash.initExtra = ''
-      if [ -f "$HOME/.snowbox-env" ]; then
-        . "$HOME/.snowbox-env"
-      fi
-    '';
     starship.enable = true;
     starship.enableBashIntegration = true;
     starship.settings = {

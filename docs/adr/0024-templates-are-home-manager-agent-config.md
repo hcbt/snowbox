@@ -8,4 +8,4 @@ devenv is always in the Environment. It is not a Template choice and not baked i
 
 This supersedes [0003](0003-adding-a-package-applies-immediately.md) (no catalog, no live Package add) and the “no vendor list” sentence of [0013](0013-agents-are-uncapped-per-sandbox.md). Vendors appear as Template options; the product noun stays Agent. Snowbox may still start zero or one command.
 
-Secrets do not belong in the flake: home-manager `apiKey` options would land in the Cache. Tokens are environment variables in the shell; they do not survive Reset ([0027](0027-reset-rewinds-to-create.md)).
+Secrets do not belong in the flake: home-manager `apiKey` options would land in the Cache. Placing a Secret is later.

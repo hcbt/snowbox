@@ -127,28 +127,18 @@ function parseSettings(text: string): JsonObject | undefined {
 function applyTemplateDoc(
   name: string,
   setEnvCfg: (v: { [name: string]: EnvProgram }) => void,
-  setEnvVars: (v: string) => void,
 ): void {
   if (!name) return;
   api
     .template(name)
     .then((cfg) => {
       setEnvCfg(cfg.programs ?? {});
-      setEnvVars(JSON.stringify(cfg.env ?? {}, null, 2));
     })
     .catch(() => {});
 }
 
-function environmentBody(
-  doc: EnvironmentDoc,
-  cfg: { [name: string]: EnvProgram },
-  envText: string,
-): EnvironmentDoc {
-  const env = parseSettings(envText || "{}");
-  const out: EnvironmentDoc = { ...doc, programs: cfg };
-  if (env && Object.keys(env).length > 0) out.env = env;
-  else delete out.env;
-  return out;
+function environmentBody(doc: EnvironmentDoc, cfg: { [name: string]: EnvProgram }): EnvironmentDoc {
+  return { ...doc, programs: cfg };
 }
 
 export function OverlayDialog(props: {
@@ -183,7 +173,6 @@ export function OverlayDialog(props: {
   const [attachToken, setAttachToken] = createSignal("");
   const [hostPick, setHostPick] = createSignal(props.hosts?.[0]?.id ?? "");
   const [customize, setCustomize] = createSignal(false);
-  const [envVars, setEnvVars] = createSignal("");
   const [tplName, setTplName] = createSignal("");
   const [optErr, setOptErr] = createSignal("");
   const start = overlayBox(props.overlay.kind);
@@ -196,7 +185,6 @@ export function OverlayDialog(props: {
       setAgents,
       setEnvDoc,
       setEnvCfg,
-      setEnvVars,
       setOptErr,
     });
   });
@@ -215,7 +203,6 @@ export function OverlayDialog(props: {
       hostPick: hostPick(),
       envDoc: envDoc(),
       envCfg: envCfg(),
-      envVars: envVars(),
       customize: customize(),
       tplName: tplName(),
     });
@@ -270,8 +257,6 @@ export function OverlayDialog(props: {
             agents={agents()}
             envCfg={envCfg()}
             setEnvCfg={setEnvCfg}
-            envVars={envVars()}
-            setEnvVars={setEnvVars}
             customize={customize()}
             setCustomize={setCustomize}
             tplName={tplName()}
@@ -319,7 +304,6 @@ function loadOverlay(
     setAgents: (a: AgentProgram[]) => void;
     setEnvDoc: (d: EnvironmentDoc) => void;
     setEnvCfg: (c: { [name: string]: EnvProgram }) => void;
-    setEnvVars: (v: string) => void;
     setOptErr: (v: string) => void;
   },
 ): void {
@@ -355,7 +339,6 @@ function loadOverlay(
       .then((cfg) => {
         set.setEnvDoc(cfg);
         set.setEnvCfg(cfg.programs ?? {});
-        set.setEnvVars(JSON.stringify(cfg.env ?? {}, null, 2));
       })
       .catch(() => {});
   }
@@ -382,7 +365,6 @@ async function submitOverlay(
     hostPick: string;
     envDoc: EnvironmentDoc;
     envCfg: { [name: string]: EnvProgram };
-    envVars: string;
     customize: boolean;
     tplName: string;
   },
@@ -402,9 +384,7 @@ async function submitOverlay(
     props.close();
     await props.run(
       async () => {
-        const env = form.customize
-          ? environmentBody(form.envDoc, form.envCfg, form.envVars)
-          : undefined;
+        const env = form.customize ? environmentBody(form.envDoc, form.envCfg) : undefined;
         const sb = await client.create(form.name || undefined, form.tpl || undefined, env);
         await client.openWindow(sb.id);
         props.refresh?.();
@@ -418,10 +398,7 @@ async function submitOverlay(
     if (!form.tplName.trim()) return;
     ok = await props.run(() =>
       client
-        .saveTemplateConfig(
-          form.tplName.trim(),
-          environmentBody(form.envDoc, form.envCfg, form.envVars),
-        )
+        .saveTemplateConfig(form.tplName.trim(), environmentBody(form.envDoc, form.envCfg))
         .then(() => undefined),
     );
   } else if (ov.kind === "save-template") {
@@ -441,7 +418,7 @@ async function submitOverlay(
     ok = await props.run(
       () =>
         client
-          .saveEnvironment(ov.id, environmentBody(form.envDoc, form.envCfg, form.envVars))
+          .saveEnvironment(ov.id, environmentBody(form.envDoc, form.envCfg))
           .then(() => undefined),
       running ? "" : "applies on Start",
       running,
@@ -494,8 +471,6 @@ function OverlayFields(props: {
   agents: AgentProgram[];
   envCfg: { [name: string]: EnvProgram };
   setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
-  envVars: string;
-  setEnvVars: (v: string) => void;
   customize: boolean;
   setCustomize: (v: boolean) => void;
   tplName: string;
@@ -531,8 +506,6 @@ function OverlayFields(props: {
           agents={props.agents}
           envCfg={props.envCfg}
           setEnvCfg={props.setEnvCfg}
-          envVars={props.envVars}
-          setEnvVars={props.setEnvVars}
           optErr={props.optErr}
           hosts={props.hosts}
           hostPick={props.hostPick}
@@ -586,9 +559,6 @@ function OverlayFields(props: {
           agents={props.agents}
           envCfg={props.envCfg}
           setEnvCfg={props.setEnvCfg}
-          envVars={props.envVars}
-          setEnvVars={props.setEnvVars}
-          secrets
           optErr={props.optErr}
         />
       </Show>
@@ -600,8 +570,6 @@ function OverlayFields(props: {
           agents={props.agents}
           envCfg={props.envCfg}
           setEnvCfg={props.setEnvCfg}
-          envVars={props.envVars}
-          setEnvVars={props.setEnvVars}
           optErr={props.optErr}
         />
       </Show>
@@ -671,8 +639,6 @@ function NewSandboxFields(props: {
   agents: AgentProgram[];
   envCfg: { [name: string]: EnvProgram };
   setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
-  envVars: string;
-  setEnvVars: (v: string) => void;
   optErr: string;
   hosts: HostRec[];
   hostPick: string;
@@ -705,7 +671,7 @@ function NewSandboxFields(props: {
           options={templatePicks(props.templates)}
           onChange={(name) => {
             props.setTpl(name);
-            if (props.customize) applyTemplateDoc(name, props.setEnvCfg, props.setEnvVars);
+            if (props.customize) applyTemplateDoc(name, props.setEnvCfg);
           }}
         />
       </div>
@@ -716,7 +682,7 @@ function NewSandboxFields(props: {
           onChange={(e) => {
             const on = e.currentTarget.checked;
             props.setCustomize(on);
-            if (on) applyTemplateDoc(props.tpl, props.setEnvCfg, props.setEnvVars);
+            if (on) applyTemplateDoc(props.tpl, props.setEnvCfg);
           }}
         />
         Customize
@@ -726,9 +692,6 @@ function NewSandboxFields(props: {
           agents={props.agents}
           envCfg={props.envCfg}
           setEnvCfg={props.setEnvCfg}
-          envVars={props.envVars}
-          setEnvVars={props.setEnvVars}
-          secrets
           optErr={props.optErr}
         />
       </Show>
@@ -978,9 +941,6 @@ function EnvironmentFields(props: {
   agents: AgentProgram[];
   envCfg: { [name: string]: EnvProgram };
   setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
-  envVars: string;
-  setEnvVars: (v: string) => void;
-  secrets: boolean;
   optErr?: string;
 }) {
   return (
@@ -1030,21 +990,6 @@ function EnvironmentFields(props: {
           );
         }}
       </For>
-      <Show when={props.secrets}>
-        <label class={label}>
-          environment variables (JSON object of strings)
-          <textarea
-            class={`${field} h-20`}
-            value={props.envVars}
-            placeholder={`{\n  "ANTHROPIC_API_KEY": ""\n}`}
-            onChange={(e) => {
-              const text = e.currentTarget.value;
-              if (!parseSettings(text || "{}")) return;
-              props.setEnvVars(text);
-            }}
-          />
-        </label>
-      </Show>
     </>
   );
 }
@@ -1056,8 +1001,6 @@ function TemplatesFields(props: {
   agents: AgentProgram[];
   envCfg: { [name: string]: EnvProgram };
   setEnvCfg: (v: { [name: string]: EnvProgram }) => void;
-  envVars: string;
-  setEnvVars: (v: string) => void;
   optErr: string;
 }) {
   const selected = () => props.templates.find((t) => t.name === props.tplName);
@@ -1078,7 +1021,7 @@ function TemplatesFields(props: {
           ]}
           onChange={(name) => {
             props.setTplName(name);
-            applyTemplateDoc(name, props.setEnvCfg, props.setEnvVars);
+            applyTemplateDoc(name, props.setEnvCfg);
           }}
         />
       </div>
@@ -1087,9 +1030,6 @@ function TemplatesFields(props: {
           agents={props.agents}
           envCfg={props.envCfg}
           setEnvCfg={props.setEnvCfg}
-          envVars={props.envVars}
-          setEnvVars={props.setEnvVars}
-          secrets={false}
           optErr={props.optErr}
         />
       </Show>

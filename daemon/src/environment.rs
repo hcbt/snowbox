@@ -174,76 +174,8 @@ fn check_extra_packages(value: &serde_json::Value) -> Result<(), ActionError> {
     Ok(())
 }
 
-fn secrets_path(dir: &Path) -> std::path::PathBuf {
-    dir.join("secrets.json")
-}
-
-pub fn secrets(dir: &Path) -> serde_json::Map<String, serde_json::Value> {
-    let Ok(raw) = std::fs::read_to_string(secrets_path(dir)) else {
-        return serde_json::Map::new();
-    };
-    serde_json::from_str(&raw).unwrap_or_default()
-}
-
-pub fn set_secrets(
-    dir: &Path,
-    env: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), ActionError> {
-    if env.is_empty() {
-        clear_secrets(dir);
-        return Ok(());
-    }
-    let raw = serde_json::to_string_pretty(env).map_err(|_| ActionError::Internal)?;
-    std::fs::write(secrets_path(dir), raw).map_err(|_| ActionError::Internal)
-}
-
-pub fn clear_secrets(dir: &Path) {
-    let _ = std::fs::remove_file(secrets_path(dir));
-}
-
-pub fn write_guest_env(
-    home: &Path,
-    env: &serde_json::Map<String, serde_json::Value>,
-) -> Result<(), ActionError> {
-    std::fs::create_dir_all(home).map_err(|_| ActionError::Internal)?;
-    let path = home.join(".snowbox-env");
-    if env.is_empty() {
-        let _ = std::fs::remove_file(&path);
-        return Ok(());
-    }
-    let mut buf = String::new();
-    for (k, v) in env {
-        let Some(val) = v.as_str() else {
-            continue;
-        };
-        if !key_ok(k) {
-            return Err(ActionError::BadRequest("invalid env name"));
-        }
-        buf.push_str("export ");
-        buf.push_str(k);
-        buf.push_str("='");
-        buf.push_str(&val.replace('\'', "'\\''"));
-        buf.push_str("'\n");
-    }
-    std::fs::write(path, buf).map_err(|_| ActionError::Internal)
-}
-
-fn key_ok(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first.is_ascii_alphabetic() || first == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
-
 pub fn document(dir: &Path) -> Result<serde_json::Value, ActionError> {
-    let mut cfg = config(dir)?;
-    let env = secrets(dir);
-    if !env.is_empty() {
-        cfg["env"] = serde_json::Value::Object(env);
-    }
-    Ok(cfg)
+    config(dir)
 }
 
 pub fn set_document(
@@ -251,16 +183,11 @@ pub fn set_document(
     value: &serde_json::Value,
 ) -> Result<serde_json::Value, ActionError> {
     let mut body = value.clone();
-    let env = body.as_object_mut().and_then(|o| o.remove("env"));
-    set_config(dir, &body)?;
-    match env {
-        Some(serde_json::Value::Object(map)) => set_secrets(dir, &map)?,
-        Some(_) => return Err(ActionError::BadRequest("env must be an object")),
-        None => clear_secrets(dir),
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("env");
     }
-    let env = secrets(dir);
-    write_guest_env(&dir.join("home"), &env)?;
-    document(dir)
+    set_config(dir, &body)?;
+    config(dir)
 }
 
 #[cfg(test)]
@@ -355,19 +282,16 @@ mod tests {
     }
 
     #[test]
-    fn document_keeps_env_out_of_flake_config() {
+    fn document_drops_env() {
         let dir = tempfile::tempdir().unwrap();
         write_default(dir.path()).unwrap();
         let mut body = config(dir.path()).unwrap();
         body["env"] = serde_json::json!({ "ANTHROPIC_API_KEY": "sk-test" });
         set_document(dir.path(), &body).unwrap();
         assert!(config(dir.path()).unwrap().get("env").is_none());
-        assert_eq!(
-            document(dir.path()).unwrap()["env"]["ANTHROPIC_API_KEY"],
-            "sk-test"
-        );
-        let sourced = std::fs::read_to_string(dir.path().join("home/.snowbox-env")).unwrap();
-        assert!(sourced.contains("ANTHROPIC_API_KEY"));
+        assert!(document(dir.path()).unwrap().get("env").is_none());
+        assert!(!dir.path().join("secrets.json").is_file());
+        assert!(!dir.path().join("home/.snowbox-env").is_file());
     }
 
     #[test]

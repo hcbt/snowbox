@@ -34,7 +34,6 @@ export type EnvProgram = JsonObject;
 
 export type EnvironmentDoc = {
   programs?: { [name: string]: EnvProgram };
-  env?: JsonObject;
 };
 
 export type WindowRec = {

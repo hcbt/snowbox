@@ -315,7 +315,6 @@ fn write_meta(dir: &Path, meta: &Meta) -> Result<(), ActionError> {
 
 fn reset_tree(dir: &Path) -> Result<(), ActionError> {
     crate::environment::restore_create(dir)?;
-    crate::environment::clear_secrets(dir);
 
     let system = dir.join("system");
     if system.exists() {

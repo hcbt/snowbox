@@ -59,7 +59,7 @@ Not a Snowbox verb. Guest ports stay closed to the Host.
 _Avoid_: expose, forward, ingress, port map
 
 **Secret**:
-A credential that may be placed in a Sandbox in v1 if the user chooses (tokens, keys, agent sockets). A Host-side broker that keeps real secrets out of the Sandbox is a later, optional feature — not enforced.
+A credential (tokens, keys, agent sockets). Placing one is later. A Host-side broker that keeps real secrets out of the Sandbox is later.
 _Avoid_: credential, env var (when you mean the secret itself)
 
 **Limits**:
