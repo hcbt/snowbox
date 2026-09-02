@@ -172,7 +172,7 @@
   }
 
   .twm-iconify {
-    background: var(--color-twm);
+    background: transparent;
   }
 
   .twm-iconify::after {

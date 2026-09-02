@@ -486,13 +486,19 @@ function OverlayFields(props: {
         <SandboxList sandboxes={props.sandboxes} pick={props.pickSandbox} />
       </Show>
       <Show when={ov().kind === "destroy"}>
-        <p class="text-[13px]">Destroy {props.sandboxName}? Workspace is gone.</p>
+        <div class="flex flex-col gap-2">
+          <p class="text-[13px]">Destroy {props.sandboxName}?</p>
+          <p class="text-[13px] font-normal leading-[18px] text-twm-muted">Workspace is gone.</p>
+        </div>
       </Show>
       <Show when={ov().kind === "reset"}>
-        <p class="text-[13px]">
-          Reset {props.sandboxName}? Puts this Sandbox back to Create. The project stays. Linux home
-          (logins, extra files) is wiped. The form goes back to how it was at Create.
-        </p>
+        <div class="flex flex-col gap-2">
+          <p class="text-[13px]">Reset {props.sandboxName}?</p>
+          <p class="text-[13px] font-normal leading-[18px] text-twm-muted">
+            Puts this Sandbox back to Create. The project stays. Linux home (logins, extra files) is
+            wiped. The form goes back to how it was at Create.
+          </p>
+        </div>
       </Show>
       <Show when={ov().kind === "sandbox"}>
         <NewSandboxFields
