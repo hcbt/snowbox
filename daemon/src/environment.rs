@@ -202,6 +202,23 @@ mod tests {
     }
 
     #[test]
+    fn starship_character_uses_nix_backslash_dollar() {
+        // Starship treats $ as a variable. Literal $ is \$ (not $$).
+        // Nix [\$] becomes [$] because \$ is not a Nix escape; [\\$] emits [\$].
+        assert!(
+            DEFAULT_HOME.contains(r#"success_symbol = "[\\$](#ededef)";"#),
+            "success_symbol must be Nix [\\\\$] so Starship sees [\\$]"
+        );
+        assert!(DEFAULT_HOME.contains(r#"error_symbol = "[\\$](#ededef)";"#));
+        assert!(
+            !DEFAULT_HOME.contains(r#"success_symbol = "[$$]"#)
+                && !DEFAULT_HOME.contains(r#"success_symbol = "[\$]"#)
+                && !DEFAULT_HOME.contains(r#"success_symbol = "[$]"#),
+            "unescaped or $$ forms make Starship print expected variable_name"
+        );
+    }
+
+    #[test]
     fn write_default_creates_host_flake() {
         let dir = tempfile::tempdir().unwrap();
         write_default(dir.path()).unwrap();

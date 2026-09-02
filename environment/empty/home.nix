@@ -42,8 +42,9 @@ in
         truncation_length = 8;
       };
       character = {
-        success_symbol = "[$$](#ededef)";
-        error_symbol = "[$$](#ededef)";
+        # Starship literal $ is \$; Nix [\$] drops the slash. $$ still fails to parse.
+        success_symbol = "[\\$](#ededef)";
+        error_symbol = "[\\$](#ededef)";
       };
     };
   }
