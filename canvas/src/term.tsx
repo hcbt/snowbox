@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { HostRec } from "./hosts";
 import { readTermPoster, writeTermPoster } from "./layout-sync";
+import { termPalette, type Mode, type Theme } from "./appearance";
 
 type PtyFrame = string | ArrayBuffer | ArrayBufferView;
 
@@ -23,6 +24,8 @@ function wsBytes(data: PtyFrame): string | Uint8Array {
 export function Term(props: {
   windowId: string;
   host?: HostRec;
+  theme: Theme;
+  mode: Mode;
   active?: boolean;
   onActivate?: () => void;
 }) {
@@ -50,14 +53,7 @@ export function Term(props: {
       fontSize: 13,
       lineHeight: 20 / 13,
       scrollback: 5000,
-      theme: {
-        background: "#1c1c20",
-        foreground: "#ededef",
-        cursor: "#6b3a9e",
-        cursorAccent: "#ededef",
-        selectionBackground: "#6b3a9e",
-        selectionForeground: "#ffffff",
-      },
+      theme: termPalette(props.theme, props.mode),
     });
     term = t;
     const fit = new FitAddon();
@@ -157,6 +153,13 @@ export function Term(props: {
     () => props.active,
     (active) => {
       if (active) term?.focus();
+    },
+  );
+
+  createEffect(
+    () => termPalette(props.theme, props.mode),
+    (palette) => {
+      if (term) term.options.theme = palette;
     },
   );
 

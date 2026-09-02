@@ -12,7 +12,7 @@ export type Overlay =
 
 export type MenuPos = { x: number; y: number };
 
-export const overlayZ = 50000;
+export const overlayZ = 99995;
 
 export function placeOverlay(x = 220, y = 56) {
   return { x, y } satisfies MenuPos;

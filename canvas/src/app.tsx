@@ -25,6 +25,7 @@ import {
 } from "./hosts";
 import { sandboxesWithoutWindows } from "./sandbox-icons";
 import { menuHit, type MenuHit } from "./menu-target";
+import { applyAppearance, parseMode, parseTheme, type Mode, type Theme } from "./appearance";
 import {
   applyFetchedLayout,
   firstById,
@@ -50,12 +51,14 @@ function persistRoster(hosts: HostRec[]): void {
   saveRoster(storage, hosts);
 }
 
-function persistChrome(layout: Layout): void {
+function persistChrome(layout: Layout, theme: Theme, mode: Mode): void {
   const storage = globalThis.localStorage;
   if (!storage) return;
   saveChrome(storage, {
     icon_manager: layout.icon_manager,
     log: layout.log ?? defaultLog(),
+    theme,
+    mode,
   });
 }
 
@@ -63,7 +66,12 @@ function readChrome(fallback?: Layout) {
   return loadChrome(
     globalThis.localStorage,
     fallback
-      ? { icon_manager: fallback.icon_manager, log: fallback.log ?? defaultLog() }
+      ? {
+          icon_manager: fallback.icon_manager,
+          log: fallback.log ?? defaultLog(),
+          theme: "twm",
+          mode: "night",
+        }
       : undefined,
   );
 }
@@ -108,12 +116,45 @@ export function App() {
   const [ready, setReady] = createSignal(cached !== null);
   const [interacting, setInteracting] = createSignal(false);
   const [logLines, setLogLines] = createSignal<string[]>(cached?.logLines ?? []);
+  const startChrome = readChrome(cached?.layout);
+  const [theme, setTheme] = createSignal<Theme>(startChrome.theme);
+  const [mode, setMode] = createSignal<Mode>(startChrome.mode);
 
   const commit = (next: Layout) => {
     setLayout(next);
     writeCachedLayout(next);
-    persistChrome(next);
+    persistChrome(next, theme(), mode());
   };
+
+  const setThemePersist = (next: Theme) => {
+    const t = parseTheme(next);
+    setTheme(t);
+    persistChrome(layout(), t, mode());
+  };
+
+  const setModePersist = (next: Mode) => {
+    const m = parseMode(next);
+    setMode(m);
+    persistChrome(layout(), theme(), m);
+  };
+
+  createEffect(
+    () => [theme(), mode()] as const,
+    ([t, m]) => {
+      applyAppearance(document.documentElement, t, m);
+    },
+  );
+
+  onSettled(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (!overlay()) return;
+      e.preventDefault();
+      setOverlay(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   const logRec = () => layout().log ?? defaultLog();
 
@@ -347,6 +388,7 @@ export function App() {
     >
       <Show when={ready()}>
         <IconManager
+          theme={theme()}
           layout={layout()}
           sandboxes={sandboxes()}
           hosts={hosts()}
@@ -375,6 +417,8 @@ export function App() {
           }
         />
         <CanvasWindows
+          theme={theme()}
+          mode={mode()}
           layout={layout()}
           sandboxes={sandboxes()}
           hosts={hosts()}
@@ -397,6 +441,9 @@ export function App() {
             sandbox={hit().sandbox ?? undefined}
             window={hit().window}
             iconMgr={layout().icon_manager.visible}
+            logVisible={logRec().visible}
+            theme={theme()}
+            mode={mode()}
             layout={layout()}
             setOverlay={openOverlay}
             setMenu={setMenu}
@@ -408,6 +455,14 @@ export function App() {
             hosts={hosts()}
             onAttach={() => openOverlay({ kind: "attach", ...placeOverlay() })}
             onHosts={() => openOverlay({ kind: "hosts", ...placeOverlay() })}
+            onTheme={setThemePersist}
+            onMode={setModePersist}
+            onToggleLog={() =>
+              save({
+                ...layout(),
+                log: { ...logRec(), visible: !logRec().visible },
+              })
+            }
           />
         )}
       </Show>
@@ -415,6 +470,7 @@ export function App() {
         {(ov) => (
           <OverlayDialog
             overlay={ov()}
+            theme={theme()}
             sandbox={sandboxes().find((s) => overlayId(ov()) === s.id)}
             sandboxes={sandboxes()}
             hosts={hosts()}
@@ -443,6 +499,7 @@ export function App() {
       </Show>
       <Show when={ready() && logRec().visible}>
         <LogWindow
+          theme={theme()}
           x={logRec().x}
           y={logRec().y}
           w={logRec().w}
@@ -467,6 +524,7 @@ export function App() {
 }
 
 function LogWindow(props: {
+  theme: Theme;
   x: number;
   y: number;
   w: number;
@@ -522,6 +580,7 @@ function LogWindow(props: {
   return (
     <Frame
       title="log"
+      theme={props.theme}
       x={props.x}
       y={props.y}
       w={props.w}
@@ -551,6 +610,7 @@ function StatusLine(props: { busy: boolean; status: string }) {
 }
 
 function IconManager(props: {
+  theme: Theme;
   layout: Layout;
   sandboxes: Sandbox[];
   hosts: HostRec[];
@@ -571,12 +631,14 @@ function IconManager(props: {
     <Show when={im().visible}>
       <Frame
         title="Icon Manager"
+        theme={props.theme}
+        sheen={props.theme === "twm"}
+        frameClass={props.theme === "rio" ? "twm-icons" : undefined}
         x={im().x}
         y={im().y}
         w={im().w}
         h={im().h}
         z={99990}
-        sheen
         onMoveStart={props.beginGeom}
         onMove={(x, y) => props.patchIcon({ x, y })}
         onResize={(w, h) => props.patchIcon({ w, h })}
@@ -651,6 +713,8 @@ function windowStatus(sandboxes: Sandbox[], id: string): string {
 }
 
 function CanvasWindows(props: {
+  theme: Theme;
+  mode: Mode;
   layout: Layout;
   sandboxes: Sandbox[];
   hosts: HostRec[];
@@ -671,6 +735,7 @@ function CanvasWindows(props: {
         <Show when={!w().iconified}>
           <Frame
             title={w().title}
+            theme={props.theme}
             x={w().x}
             y={w().y}
             w={w().w}
@@ -709,6 +774,8 @@ function CanvasWindows(props: {
             >
               <Term
                 windowId={w().id}
+                theme={props.theme}
+                mode={props.mode}
                 host={hostById(props.hosts, w().host)}
                 active={props.focus === w().id}
                 onActivate={() => props.raise(w().id)}
@@ -726,6 +793,9 @@ function AppMenu(props: {
   sandbox?: Sandbox;
   window: WindowRec | null;
   iconMgr: boolean;
+  logVisible: boolean;
+  theme: Theme;
+  mode: Mode;
   layout: Layout;
   setOverlay: (ov: Overlay) => void;
   setMenu: (m: MenuHit | null) => void;
@@ -736,6 +806,9 @@ function AppMenu(props: {
   save: (next: Layout) => void;
   onAttach: () => void;
   onHosts: () => void;
+  onTheme: (theme: Theme) => void;
+  onMode: (mode: Mode) => void;
+  onToggleLog: () => void;
   hosts: HostRec[];
 }) {
   const at = placeOverlay();
@@ -749,6 +822,9 @@ function AppMenu(props: {
       sandbox={props.sandbox}
       window={props.window}
       iconMgr={props.iconMgr}
+      logVisible={props.logVisible}
+      theme={props.theme}
+      mode={props.mode}
       onNewSandbox={() => props.setOverlay({ kind: "sandbox", ...at })}
       onSandboxes={() => props.setOverlay({ kind: "sandboxes", ...at })}
       onSaveTemplate={() => {
@@ -819,6 +895,9 @@ function AppMenu(props: {
           },
         })
       }
+      onToggleLog={() => props.onToggleLog()}
+      onTheme={(t) => props.onTheme(t)}
+      onMode={(m) => props.onMode(m)}
       onLimits={() => {
         const box = sb();
         if (box) props.setOverlay({ kind: "limits", id: box.id, ...at });

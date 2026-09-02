@@ -1,5 +1,6 @@
 import type { JSX } from "solid-js";
 import { Show } from "solid-js";
+import { windowChrome, type Theme } from "./appearance";
 
 function CloseMark() {
   return (
@@ -7,7 +8,7 @@ function CloseMark() {
       <path
         d="M1.2 1.2 L6.8 6.8 M6.8 1.2 L1.2 6.8"
         fill="none"
-        stroke="#fff"
+        stroke="currentColor"
         strokeWidth="1.4"
         strokeLinecap="square"
       />
@@ -17,6 +18,8 @@ function CloseMark() {
 
 export function Frame(props: {
   title: string;
+  theme?: Theme;
+  frameClass?: string;
   x: number;
   y: number;
   z: number;
@@ -92,13 +95,15 @@ export function Frame(props: {
     window.addEventListener("mouseup", up);
   };
 
+  const bar = () => windowChrome(props.theme ?? "twm").titlebar;
   return (
     <div
       ref={(el) => {
         root = el;
       }}
-      class={`twm-float absolute flex min-h-[80px] min-w-[180px] flex-col${props.sheen ? " twm-sheen" : ""}`}
+      class={`twm-float absolute flex min-h-[80px] min-w-[180px] flex-col${props.sheen ? " twm-sheen" : ""}${props.frameClass ? ` ${props.frameClass}` : ""}`}
       data-win={props.dataWin}
+      aria-label={props.title}
       style={{
         left: `${props.x}px`,
         top: `${props.y}px`,
@@ -114,50 +119,55 @@ export function Frame(props: {
         props.onContextMenu(e);
       }}
     >
-      <div class="twm-bar cursor-grab active:cursor-grabbing" onMouseDown={(e) => drag(e, "move")}>
-        <span class="twm-win-icon" />
-        <span class="min-w-0 flex-1 overflow-hidden whitespace-nowrap">{props.title}</span>
-        <Show when={props.onEnvironment}>
-          <button
-            type="button"
-            class="twm-env"
-            title="Environment"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              props.onEnvironment?.();
-            }}
-          >
-            ENV
-          </button>
-        </Show>
-        <Show when={props.onIconify}>
-          <button
-            type="button"
-            class="twm-win-btn twm-iconify"
-            title="Iconify"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              props.onIconify?.();
-            }}
-          />
-        </Show>
-        <Show when={props.onClose}>
-          <button
-            type="button"
-            class="twm-win-btn"
-            title="Close"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              props.onClose?.();
-            }}
-          >
-            <CloseMark />
-          </button>
-        </Show>
-      </div>
+      <Show when={bar()}>
+        <div
+          class="twm-bar cursor-grab active:cursor-grabbing"
+          onMouseDown={(e) => drag(e, "move")}
+        >
+          <span class="twm-win-icon" />
+          <span class="min-w-0 flex-1 overflow-hidden whitespace-nowrap">{props.title}</span>
+          <Show when={props.onEnvironment}>
+            <button
+              type="button"
+              class="twm-env"
+              title="Environment"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                props.onEnvironment?.();
+              }}
+            >
+              ENV
+            </button>
+          </Show>
+          <Show when={props.onIconify}>
+            <button
+              type="button"
+              class="twm-win-btn twm-iconify"
+              title="Iconify"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                props.onIconify?.();
+              }}
+            />
+          </Show>
+          <Show when={props.onClose}>
+            <button
+              type="button"
+              class="twm-win-btn"
+              title="Close"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                props.onClose?.();
+              }}
+            >
+              <CloseMark />
+            </button>
+          </Show>
+        </div>
+      </Show>
       <div class={`twm-body${props.sheen ? " twm-body-panel" : ""}`}>
         {props.children}
         <Show when={props.onResize && props.w !== undefined && props.h !== undefined}>
@@ -175,6 +185,10 @@ export function Frame(props: {
           />
         </Show>
       </div>
+      <Show when={!bar()}>
+        <div class="twm-move-n" onMouseDown={(e) => drag(e, "move")} />
+      </Show>
+      <div class="twm-move-w" onMouseDown={(e) => drag(e, "move")} />
     </div>
   );
 }

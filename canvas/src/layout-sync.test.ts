@@ -168,6 +168,58 @@ describe("canvas chrome", () => {
     expect(loaded.log.visible).toBe(true);
   });
 
+  test("roundtrip Theme and Mode", () => {
+    const store: Record<string, string> = {};
+    saveChrome(
+      {
+        setItem: (k, v) => {
+          store[k] = v;
+        },
+      },
+      {
+        icon_manager: { x: 8, y: 8, w: 200, h: 240, visible: true },
+        log: defaultLog(),
+        theme: "rio",
+        mode: "day",
+      },
+    );
+    const loaded = loadChrome({ getItem: (k) => store[k] ?? null });
+    expect(loaded.theme).toBe("rio");
+    expect(loaded.mode).toBe("day");
+  });
+
+  test("missing Theme and Mode default to twm night", () => {
+    const store: Record<string, string> = {};
+    saveChrome(
+      {
+        setItem: (k, v) => {
+          store[k] = v;
+        },
+      },
+      {
+        icon_manager: { x: 8, y: 8, w: 200, h: 240, visible: true },
+        log: defaultLog(),
+      },
+    );
+    const loaded = loadChrome({ getItem: (k) => store[k] ?? null });
+    expect(loaded.theme).toBe("twm");
+    expect(loaded.mode).toBe("night");
+  });
+
+  test("garbage Theme and Mode fall back to twm night", () => {
+    const loaded = loadChrome({
+      getItem: () =>
+        JSON.stringify({
+          icon_manager: { x: 8, y: 8, w: 200, h: 240, visible: true },
+          log: defaultLog(),
+          theme: "plan9",
+          mode: "light",
+        }),
+    });
+    expect(loaded.theme).toBe("twm");
+    expect(loaded.mode).toBe("night");
+  });
+
   test("missing storage uses defaults", () => {
     expect(loadChrome(undefined)).toEqual(defaultChrome());
   });

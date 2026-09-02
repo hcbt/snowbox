@@ -1,4 +1,12 @@
 import type { Layout, LogRec, Sandbox, WindowRec } from "./api";
+import {
+  defaultMode,
+  defaultTheme,
+  parseMode,
+  parseTheme,
+  type Mode,
+  type Theme,
+} from "./appearance";
 
 export function defaultLog(): LogRec {
   return { x: 240, y: 72, w: 560, h: 280, visible: false };
@@ -61,12 +69,16 @@ export const CHROME_KEY = "snowbox.chrome";
 export type CanvasChrome = {
   icon_manager: Layout["icon_manager"];
   log: LogRec;
+  theme: Theme;
+  mode: Mode;
 };
 
 export function defaultChrome(): CanvasChrome {
   return {
     icon_manager: defaultLayout().icon_manager,
     log: defaultLog(),
+    theme: defaultTheme,
+    mode: defaultMode,
   };
 }
 
@@ -84,18 +96,25 @@ export function loadChrome(
     return {
       icon_manager: normalizeIcon(parsed.icon_manager ?? seed.icon_manager),
       log: normalizeLog(parsed.log ?? seed.log),
+      theme: parseTheme(parsed.theme),
+      mode: parseMode(parsed.mode),
     };
   } catch {
     return seed;
   }
 }
 
-export function saveChrome(storage: Pick<Storage, "setItem">, chrome: CanvasChrome): void {
+export function saveChrome(
+  storage: Pick<Storage, "setItem">,
+  chrome: Omit<CanvasChrome, "theme" | "mode"> & { theme?: Theme; mode?: Mode },
+): void {
   storage.setItem(
     CHROME_KEY,
     JSON.stringify({
       icon_manager: normalizeIcon(chrome.icon_manager),
       log: normalizeLog(chrome.log),
+      theme: parseTheme(chrome.theme),
+      mode: parseMode(chrome.mode),
     }),
   );
 }

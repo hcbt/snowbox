@@ -16,6 +16,7 @@ import {
 } from "./api";
 import { overlayZ, type Overlay } from "./overlay";
 import type { HostRec } from "./hosts";
+import { windowChrome, type Theme } from "./appearance";
 
 const field =
   "mt-0.5 w-full box-border border border-twm-line bg-night-raised px-1 py-0.5 font-mono text-[13px] text-night-text";
@@ -143,6 +144,7 @@ function environmentBody(doc: EnvironmentDoc, cfg: { [name: string]: EnvProgram 
 
 export function OverlayDialog(props: {
   overlay: Overlay;
+  theme: Theme;
   sandbox?: Sandbox;
   sandboxes: Sandbox[];
   hosts?: HostRec[];
@@ -207,9 +209,12 @@ export function OverlayDialog(props: {
       tplName: tplName(),
     });
 
+  const title = () => overlayTitle(props.overlay, sbName());
+  const bar = () => windowChrome(props.theme).titlebar;
   return (
     <Frame
-      title={overlayTitle(props.overlay, sbName())}
+      title={title()}
+      theme={props.theme}
       x={props.overlay.x}
       y={props.overlay.y}
       w={boxW()}
@@ -220,7 +225,7 @@ export function OverlayDialog(props: {
         setBoxW(w);
         setBoxH(h);
       }}
-      onClose={props.close}
+      onClose={bar() ? props.close : undefined}
     >
       <form
         class="flex h-full min-h-0 flex-col bg-night-surface font-twm text-night-text"
@@ -230,6 +235,9 @@ export function OverlayDialog(props: {
         }}
         onMouseDown={(e) => e.stopPropagation()}
       >
+        <Show when={!bar()}>
+          <div class="twm-overlay-head">{title()}</div>
+        </Show>
         <div class="min-h-0 flex-1 overflow-auto px-3.5 py-3">
           <OverlayFields
             overlay={props.overlay}
@@ -266,16 +274,16 @@ export function OverlayDialog(props: {
             run={props.run}
           />
         </div>
-        <Show when={props.overlay.kind !== "sandboxes"}>
-          <div class="flex shrink-0 justify-end gap-2 border-t border-twm-line px-3.5 py-2">
-            <button type="button" class={push} onClick={props.close}>
-              Cancel
-            </button>
+        <div class="flex shrink-0 justify-end gap-2 border-t border-twm-line px-3.5 py-2">
+          <button type="button" class={push} onClick={props.close}>
+            Cancel
+          </button>
+          <Show when={props.overlay.kind !== "sandboxes"}>
             <button type="submit" class={push} disabled={props.busy}>
               {submitLabel(props.overlay.kind, sbName())}
             </button>
-          </div>
-        </Show>
+          </Show>
+        </div>
       </form>
     </Frame>
   );

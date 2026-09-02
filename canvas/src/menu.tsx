@@ -1,4 +1,19 @@
 import type { Sandbox, WindowRec } from "./api";
+import type { Mode, Theme } from "./appearance";
+
+function CheckItem(props: { checked: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      class="twm-menu-item"
+      aria-checked={props.checked ? "true" : "false"}
+      onClick={props.onClick}
+    >
+      <span class="inline-block w-4 shrink-0">{props.checked ? "✓" : ""}</span>
+      {props.label}
+    </button>
+  );
+}
 
 export function RootMenu(props: {
   x: number;
@@ -6,6 +21,9 @@ export function RootMenu(props: {
   sandbox?: Sandbox;
   window: WindowRec | null;
   iconMgr: boolean;
+  logVisible: boolean;
+  theme: Theme;
+  mode: Mode;
   onNewWindow: () => void;
   onNewSandbox: () => void;
   onSandboxes: () => void;
@@ -19,6 +37,9 @@ export function RootMenu(props: {
   onDestroy: () => void;
   onReset: () => void;
   onToggleIcons: () => void;
+  onToggleLog: () => void;
+  onTheme: (theme: Theme) => void;
+  onMode: (mode: Mode) => void;
   onLimits: () => void;
   onEnvironment: () => void;
   onTemplates: () => void;
@@ -158,8 +179,34 @@ export function RootMenu(props: {
         Close {winTitle()}
       </button>
       <div class="twm-menu-rule" />
+      <div class="twm-menu-head">Theme</div>
+      <CheckItem
+        checked={props.theme === "twm"}
+        label="twm"
+        onClick={() => go(() => props.onTheme("twm"))}
+      />
+      <CheckItem
+        checked={props.theme === "rio"}
+        label="rio"
+        onClick={() => go(() => props.onTheme("rio"))}
+      />
+      <div class="twm-menu-head">Mode</div>
+      <CheckItem
+        checked={props.mode === "night"}
+        label="night"
+        onClick={() => go(() => props.onMode("night"))}
+      />
+      <CheckItem
+        checked={props.mode === "day"}
+        label="day"
+        onClick={() => go(() => props.onMode("day"))}
+      />
+      <div class="twm-menu-rule" />
       <button type="button" class="twm-menu-item" onClick={() => go(props.onToggleIcons)}>
         {props.iconMgr ? "Hide Icon Manager" : "Show Icon Manager"}
+      </button>
+      <button type="button" class="twm-menu-item" onClick={() => go(props.onToggleLog)}>
+        {props.logVisible ? "Hide log" : "Show log"}
       </button>
     </div>
   );
