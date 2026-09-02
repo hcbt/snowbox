@@ -47,8 +47,8 @@ in
         truncation_length = 8;
       };
       character = {
-        success_symbol = "[\$](#ededef)";
-        error_symbol = "[\$](#ededef)";
+        success_symbol = "[$$](#ededef)";
+        error_symbol = "[$$](#ededef)";
       };
     };
   }
